@@ -16,7 +16,9 @@ package com.facebook.presto.operator;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.Type;
+import io.airlift.slice.SizeOf;
 
 import java.util.List;
 
@@ -91,6 +93,29 @@ public class PageBuilder
             sizeInBytes += blockBuilder.getSizeInBytes();
         }
         return sizeInBytes;
+    }
+
+    public boolean canAppend(int positionCount, long size)
+    {
+        if (isFull()) {
+            return false;
+        }
+        if (declaredPositions == Integer.MAX_VALUE) {
+            return false;
+        }
+        long currentSize = getSize();
+        int variableWidthBlock = 0;
+        for (BlockBuilder blockBuilder : blockBuilders) {
+            if (blockBuilder instanceof VariableWidthBlockBuilder) {
+                variableWidthBlock++;
+            }
+        }
+        long variableWidthBlockOverhead = (SizeOf.SIZE_OF_BYTE + SizeOf.SIZE_OF_INT) * variableWidthBlock * positionCount;
+        long estimatedSize = currentSize + variableWidthBlockOverhead;
+        if (estimatedSize < blockBuilderStatus.getMaxPageSizeInBytes()) {
+            return true;
+        }
+        return false;
     }
 
     public Page build()

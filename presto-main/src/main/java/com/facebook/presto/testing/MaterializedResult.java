@@ -163,7 +163,7 @@ public class MaterializedResult
         public Builder page(Page page)
         {
             checkNotNull(page, "page is null");
-            checkArgument(page.getChannelCount() == types.size(), "Expected a page with %s columns, but got %s columns", page.getChannelCount(), types.size());
+            checkArgument(page.getChannelCount() == types.size(), "Expected a page with %s columns, but got %s columns", types.size(), page.getChannelCount());
 
             for (int position = 0; position < page.getPositionCount(); position++) {
                 List<Object> values = page.getObjectValues(session, position);

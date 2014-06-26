@@ -43,6 +43,7 @@ import com.facebook.presto.operator.PageBuilder;
 import com.facebook.presto.operator.ProjectionFunction;
 import com.facebook.presto.operator.ProjectionFunctions;
 import com.facebook.presto.operator.RecordSinkManager;
+import com.facebook.presto.operator.RowNumberLimitOperator;
 import com.facebook.presto.operator.SampleOperator.SampleOperatorFactory;
 import com.facebook.presto.operator.ScanFilterAndProjectOperator.ScanFilterAndProjectOperatorFactory;
 import com.facebook.presto.operator.SetBuilderOperator.SetBuilderOperatorFactory;
@@ -50,9 +51,9 @@ import com.facebook.presto.operator.SetBuilderOperator.SetSupplier;
 import com.facebook.presto.operator.SourceOperatorFactory;
 import com.facebook.presto.operator.TableScanOperator.TableScanOperatorFactory;
 import com.facebook.presto.operator.TopNOperator.TopNOperatorFactory;
+import com.facebook.presto.operator.TopNRowNumberOperator;
 import com.facebook.presto.operator.ValuesOperator.ValuesOperatorFactory;
 import com.facebook.presto.operator.WindowFunctionDefinition;
-import com.facebook.presto.operator.WindowOperator.WindowOperatorFactory;
 import com.facebook.presto.operator.index.FieldSetFilteringRecordSet;
 import com.facebook.presto.operator.index.IndexLookupSourceSupplier;
 import com.facebook.presto.operator.index.IndexSourceOperator;
@@ -81,6 +82,7 @@ import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.RowNumberLimitNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SinkNode;
@@ -89,6 +91,7 @@ import com.facebook.presto.sql.planner.plan.TableCommitNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
+import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
@@ -134,6 +137,7 @@ import static com.facebook.presto.operator.DistinctLimitOperator.DistinctLimitOp
 import static com.facebook.presto.operator.TableCommitOperator.TableCommitOperatorFactory;
 import static com.facebook.presto.operator.TableCommitOperator.TableCommitter;
 import static com.facebook.presto.operator.TableWriterOperator.TableWriterOperatorFactory;
+import static com.facebook.presto.operator.WindowOperator.WindowOperatorFactory;
 import static com.facebook.presto.operator.index.PagesIndexBuilderOperator.PagesIndexBuilderOperatorFactory;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypesFromInput;
@@ -365,33 +369,27 @@ public class LocalExecutionPlanner
         }
 
         @Override
-        public PhysicalOperation visitWindow(WindowNode node, LocalExecutionPlanContext context)
+        public PhysicalOperation visitRowNumberLimit(RowNumberLimitNode node, LocalExecutionPlanContext context)
         {
-            PhysicalOperation source = node.getSource().accept(this, context);
+            final PhysicalOperation source = node.getSource().accept(this, context);
 
             List<Symbol> partitionBySymbols = node.getPartitionBy();
-            List<Symbol> orderBySymbols = node.getOrderBy();
-
-            // sort by PARTITION BY, then by ORDER BY
-            ImmutableList.Builder<Integer> partitionChannels = ImmutableList.builder();
-            for (Symbol symbol : partitionBySymbols) {
-                partitionChannels.add(source.getLayout().get(symbol));
-            }
-
-            ImmutableList.Builder<Integer> sortChannels = ImmutableList.builder();
-            ImmutableList.Builder<SortOrder> sortOrder = ImmutableList.builder();
-            for (Symbol symbol : orderBySymbols) {
-                sortChannels.add(source.getLayout().get(symbol));
-                sortOrder.add(node.getOrderings().get(symbol));
-            }
+            List<Integer> partitionChannels = ImmutableList.copyOf(getChannelsForSymbols(partitionBySymbols, source.getLayout()));
+            List<Type> partitionTypes = ImmutableList.copyOf(Iterables.transform(partitionChannels, new Function<Integer, Type>()
+            {
+                public Type apply(Integer input)
+                {
+                    return source.getTypes().get(input);
+                }
+            }));
 
             ImmutableList.Builder<Integer> outputChannels = ImmutableList.builder();
             for (int i = 0; i < source.getTypes().size(); i++) {
                 outputChannels.add(i);
             }
 
-            ImmutableList.Builder<WindowFunctionDefinition> windowFunctions = ImmutableList.builder();
-            List<Symbol> windowFunctionOutputSymbols = new ArrayList<>();
+            ImmutableList.Builder<WindowFunctionDefinition> windowFunctionsBuilder = ImmutableList.builder();
+            ImmutableList.Builder<Symbol> windowFunctionOutputSymbolsBuilder = ImmutableList.builder();
             for (Map.Entry<Symbol, FunctionCall> entry : node.getWindowFunctions().entrySet()) {
                 ImmutableList.Builder<Integer> arguments = ImmutableList.builder();
                 for (Expression argument : entry.getValue().getArguments()) {
@@ -400,9 +398,154 @@ public class LocalExecutionPlanner
                 }
                 Symbol symbol = entry.getKey();
                 Signature signature = node.getSignatures().get(symbol);
-                windowFunctions.add(metadata.getExactFunction(signature).bindWindowFunction(arguments.build()));
-                windowFunctionOutputSymbols.add(symbol);
+                windowFunctionsBuilder.add(metadata.getExactFunction(signature).bindWindowFunction(arguments.build()));
+                windowFunctionOutputSymbolsBuilder.add(symbol);
             }
+
+            List<Symbol> windowFunctionOutputSymbols = windowFunctionOutputSymbolsBuilder.build();
+            List<WindowFunctionDefinition> windowFunctions = windowFunctionsBuilder.build();
+
+            // compute the layout of the output from the window operator
+            ImmutableMap.Builder<Symbol, Integer> outputMappings = ImmutableMap.builder();
+            for (Symbol symbol : node.getSource().getOutputSymbols()) {
+                outputMappings.put(symbol, source.getLayout().get(symbol));
+            }
+
+            // window functions go in remaining channels starting after the last channel from the source operator, one per channel
+            int channel = source.getTypes().size();
+            for (Symbol symbol : windowFunctionOutputSymbols) {
+                outputMappings.put(symbol, channel);
+                channel++;
+            }
+
+            OperatorFactory operatorFactory = new RowNumberLimitOperator.RowNumberLimitOperatorFactory(
+                    context.getNextOperatorId(),
+                    source.getTypes(),
+                    outputChannels.build(),
+                    windowFunctions,
+                    partitionChannels,
+                    partitionTypes,
+                    1_000_000,
+                    node.getMaxRowCountPerPartition());
+            return new PhysicalOperation(operatorFactory, outputMappings.build(), source);
+        }
+
+        @Override
+        public PhysicalOperation visitTopNRowNumber(final TopNRowNumberNode node, LocalExecutionPlanContext context)
+        {
+            final PhysicalOperation source = node.getSource().accept(this, context);
+
+            List<Symbol> partitionBySymbols = node.getPartitionBy();
+            List<Integer> partitionChannels = ImmutableList.copyOf(getChannelsForSymbols(partitionBySymbols, source.getLayout()));
+            List<Type> partitionTypes = ImmutableList.copyOf(Iterables.transform(partitionChannels, new Function<Integer, Type>()
+            {
+                public Type apply(Integer input)
+                {
+                    return source.getTypes().get(input);
+                }
+            }));
+
+            List<Symbol> orderBySymbols = node.getOrderBy();
+            List<Integer> sortChannels = ImmutableList.copyOf(getChannelsForSymbols(orderBySymbols, source.getLayout()));
+            List<SortOrder> sortOrder = ImmutableList.copyOf(Iterables.transform(orderBySymbols, new Function<Symbol, SortOrder>()
+            {
+                @Override
+                public SortOrder apply(Symbol input)
+                {
+                    return node.getOrderings().get(input);
+                }
+            }));
+
+            ImmutableList.Builder<Integer> outputChannels = ImmutableList.builder();
+            for (int i = 0; i < source.getTypes().size(); i++) {
+                outputChannels.add(i);
+            }
+
+            ImmutableList.Builder<WindowFunctionDefinition> windowFunctionsBuilder = ImmutableList.builder();
+            ImmutableList.Builder<Symbol> windowFunctionOutputSymbolsBuilder = ImmutableList.builder();
+            for (Map.Entry<Symbol, FunctionCall> entry : node.getWindowFunctions().entrySet()) {
+                ImmutableList.Builder<Integer> arguments = ImmutableList.builder();
+                for (Expression argument : entry.getValue().getArguments()) {
+                    Symbol argumentSymbol = Symbol.fromQualifiedName(((QualifiedNameReference) argument).getName());
+                    arguments.add(source.getLayout().get(argumentSymbol));
+                }
+                Symbol symbol = entry.getKey();
+                Signature signature = node.getSignatures().get(symbol);
+                windowFunctionsBuilder.add(metadata.getExactFunction(signature).bindWindowFunction(arguments.build()));
+                windowFunctionOutputSymbolsBuilder.add(symbol);
+            }
+
+            List<Symbol> windowFunctionOutputSymbols = windowFunctionOutputSymbolsBuilder.build();
+            List<WindowFunctionDefinition> windowFunctions = windowFunctionsBuilder.build();
+
+            // compute the layout of the output from the window operator
+            ImmutableMap.Builder<Symbol, Integer> outputMappings = ImmutableMap.builder();
+            for (Symbol symbol : node.getSource().getOutputSymbols()) {
+                outputMappings.put(symbol, source.getLayout().get(symbol));
+            }
+
+            // window functions go in remaining channels starting after the last channel from the source operator, one per channel
+            int channel = source.getTypes().size();
+            for (Symbol symbol : windowFunctionOutputSymbols) {
+                outputMappings.put(symbol, channel);
+                channel++;
+            }
+            OperatorFactory operatorFactory = new TopNRowNumberOperator.TopNRowNumberOperatorFactory(
+                    context.getNextOperatorId(),
+                    source.getTypes(),
+                    outputChannels.build(),
+                    windowFunctions,
+                    partitionChannels,
+                    partitionTypes,
+                    sortChannels,
+                    sortOrder,
+                    node.isPartial(),
+                    node.getMaxRowCountPerPartition(),
+                    1_000_000);
+
+            return new PhysicalOperation(operatorFactory, outputMappings.build(), source);
+        }
+
+        @Override
+        public PhysicalOperation visitWindow(final WindowNode node, LocalExecutionPlanContext context)
+        {
+            final PhysicalOperation source = node.getSource().accept(this, context);
+
+            List<Symbol> partitionBySymbols = node.getPartitionBy();
+            List<Symbol> orderBySymbols = node.getOrderBy();
+            List<Integer> partitionChannels = ImmutableList.copyOf(getChannelsForSymbols(partitionBySymbols, source.getLayout()));
+
+            List<Integer> sortChannels = ImmutableList.copyOf(getChannelsForSymbols(orderBySymbols, source.getLayout()));
+            List<SortOrder> sortOrder = ImmutableList.copyOf(Iterables.transform(orderBySymbols, new Function<Symbol, SortOrder>()
+            {
+                @Override
+                public SortOrder apply(Symbol input)
+                {
+                    return node.getOrderings().get(input);
+                }
+            }));
+
+            ImmutableList.Builder<Integer> outputChannels = ImmutableList.builder();
+            for (int i = 0; i < source.getTypes().size(); i++) {
+                outputChannels.add(i);
+            }
+
+            ImmutableList.Builder<WindowFunctionDefinition> windowFunctionsBuilder = ImmutableList.builder();
+            ImmutableList.Builder<Symbol> windowFunctionOutputSymbolsBuilder = ImmutableList.builder();
+            for (Map.Entry<Symbol, FunctionCall> entry : node.getWindowFunctions().entrySet()) {
+                ImmutableList.Builder<Integer> arguments = ImmutableList.builder();
+                for (Expression argument : entry.getValue().getArguments()) {
+                    Symbol argumentSymbol = Symbol.fromQualifiedName(((QualifiedNameReference) argument).getName());
+                    arguments.add(source.getLayout().get(argumentSymbol));
+                }
+                Symbol symbol = entry.getKey();
+                Signature signature = node.getSignatures().get(symbol);
+                windowFunctionsBuilder.add(metadata.getExactFunction(signature).bindWindowFunction(arguments.build()));
+                windowFunctionOutputSymbolsBuilder.add(symbol);
+            }
+
+            List<Symbol> windowFunctionOutputSymbols = windowFunctionOutputSymbolsBuilder.build();
+            List<WindowFunctionDefinition> windowFunctions = windowFunctionsBuilder.build();
 
             // compute the layout of the output from the window operator
             ImmutableMap.Builder<Symbol, Integer> outputMappings = ImmutableMap.builder();
@@ -418,14 +561,14 @@ public class LocalExecutionPlanner
             }
 
             OperatorFactory operatorFactory = new WindowOperatorFactory(
-                    context.getNextOperatorId(),
-                    source.getTypes(),
-                    outputChannels.build(),
-                    windowFunctions.build(),
-                    partitionChannels.build(),
-                    sortChannels.build(),
-                    sortOrder.build(),
-                    1_000_000);
+                        context.getNextOperatorId(),
+                        source.getTypes(),
+                        outputChannels.build(),
+                        windowFunctions,
+                        partitionChannels,
+                        sortChannels,
+                        sortOrder,
+                        1_000_000);
 
             return new PhysicalOperation(operatorFactory, outputMappings.build(), source);
         }

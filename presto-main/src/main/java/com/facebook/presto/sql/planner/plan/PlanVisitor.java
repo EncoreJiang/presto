@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.sql.planner.plan;
 
-public class PlanVisitor<C, R>
+public abstract class PlanVisitor<C, R>
 {
     protected R visitPlan(PlanNode node, C context)
     {
@@ -131,6 +131,16 @@ public class PlanVisitor<C, R>
     }
 
     public R visitMaterializeSample(MaterializeSampleNode node, C context)
+    {
+        return visitPlan(node, context);
+    }
+
+    public R visitRowNumberLimit(RowNumberLimitNode node, C context)
+    {
+        return visitPlan(node, context);
+    }
+
+    public R visitTopNRowNumber(TopNRowNumberNode node, C context)
     {
         return visitPlan(node, context);
     }
