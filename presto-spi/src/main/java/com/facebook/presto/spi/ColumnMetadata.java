@@ -17,7 +17,7 @@ import com.facebook.presto.spi.type.Type;
 
 import java.util.Objects;
 
-import static java.util.Locale.ENGLISH;
+//import static java.util.Locale.ENGLISH;
 
 public class ColumnMetadata
 {
@@ -45,7 +45,7 @@ public class ColumnMetadata
             throw new IllegalArgumentException("ordinalPosition is negative");
         }
 
-        this.name = name.toLowerCase(ENGLISH);
+        this.name = name; //.toLowerCase(ENGLISH);
         this.type = type;
         this.ordinalPosition = ordinalPosition;
         this.partitionKey = partitionKey;

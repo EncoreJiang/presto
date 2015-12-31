@@ -118,7 +118,7 @@ public class BaseJdbcClient
                 ResultSet resultSet = connection.getMetaData().getSchemas()) {
             ImmutableSet.Builder<String> schemaNames = ImmutableSet.builder();
             while (resultSet.next()) {
-                String schemaName = resultSet.getString("TABLE_SCHEM").toLowerCase(ENGLISH);
+                String schemaName = resultSet.getString("TABLE_SCHEM");
                 // skip internal schemas
                 if (!schemaName.equals("information_schema")) {
                     schemaNames.add(schemaName);
@@ -393,8 +393,8 @@ public class BaseJdbcClient
             throws SQLException
     {
         return new SchemaTableName(
-                resultSet.getString("TABLE_SCHEM").toLowerCase(ENGLISH),
-                resultSet.getString("TABLE_NAME").toLowerCase(ENGLISH));
+                resultSet.getString("TABLE_SCHEM"),
+                resultSet.getString("TABLE_NAME"));
     }
 
     protected void execute(Connection connection, String query)

@@ -25,7 +25,7 @@ import com.google.common.primitives.Ints;
 import java.util.HashMap;
 import java.util.Map;
 
-import static java.util.Locale.ENGLISH;
+//import static java.util.Locale.ENGLISH;
 
 public class SymbolAllocator
 {
@@ -47,7 +47,7 @@ public class SymbolAllocator
         Preconditions.checkNotNull(nameHint, "name is null");
 
         // TODO: workaround for the fact that QualifiedName lowercases parts
-        nameHint = nameHint.toLowerCase(ENGLISH);
+        //nameHint = nameHint.toLowerCase(ENGLISH);
 
         // don't strip the tail if the only _ is the first character
         int index = nameHint.lastIndexOf("_");

@@ -55,7 +55,8 @@ public class JdbcRecordSink
         }
 
         try {
-            statement = connection.prepareStatement(jdbcClient.buildInsertSql(handle));
+            String sql = jdbcClient.buildInsertSql(handle);
+            statement = connection.prepareStatement(sql);
         }
         catch (SQLException e) {
             throw Throwables.propagate(e);

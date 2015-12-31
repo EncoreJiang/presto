@@ -29,7 +29,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Set;
 
-import static java.util.Locale.ENGLISH;
+//import static java.util.Locale.ENGLISH;
 
 public class MySqlClient
         extends BaseJdbcClient
@@ -47,6 +47,7 @@ public class MySqlClient
         if (mySqlConfig.getConnectionTimeout() != null) {
             connectionProperties.setProperty("connectTimeout", String.valueOf(mySqlConfig.getConnectionTimeout().toMillis()));
         }
+        connectionProperties.setProperty("zeroDateTimeBehavior", "convertToNull");
     }
 
     @Override
@@ -57,7 +58,7 @@ public class MySqlClient
                 ResultSet resultSet = connection.getMetaData().getCatalogs()) {
             ImmutableSet.Builder<String> schemaNames = ImmutableSet.builder();
             while (resultSet.next()) {
-                String schemaName = resultSet.getString("TABLE_CAT").toLowerCase(ENGLISH);
+                String schemaName = resultSet.getString("TABLE_CAT");
                 // skip internal schemas
                 if (!schemaName.equals("information_schema") && !schemaName.equals("mysql")) {
                     schemaNames.add(schemaName);
@@ -84,8 +85,8 @@ public class MySqlClient
     {
         // MySQL uses catalogs instead of schemas
         return new SchemaTableName(
-                resultSet.getString("TABLE_CAT").toLowerCase(ENGLISH),
-                resultSet.getString("TABLE_NAME").toLowerCase(ENGLISH));
+                resultSet.getString("TABLE_CAT"),
+                resultSet.getString("TABLE_NAME"));
 
     }
 

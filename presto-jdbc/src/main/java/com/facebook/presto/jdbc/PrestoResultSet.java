@@ -1712,7 +1712,7 @@ public class PrestoResultSet
         if (label == null) {
             throw new SQLException("Column label is null");
         }
-        Integer index = fieldMap.get(label.toLowerCase(ENGLISH));
+        Integer index = fieldMap.get(label); //.toLowerCase(ENGLISH));
         if (index == null) {
             throw new SQLException("Invalid column label: " + label);
         }
@@ -1803,7 +1803,7 @@ public class PrestoResultSet
     {
         Map<String, Integer> map = new HashMap<>();
         for (int i = 0; i < columns.size(); i++) {
-            String name = columns.get(i).getName().toLowerCase(ENGLISH);
+            String name = columns.get(i).getName(); //.toLowerCase(ENGLISH);
             if (!map.containsKey(name)) {
                 map.put(name, i + 1);
             }
