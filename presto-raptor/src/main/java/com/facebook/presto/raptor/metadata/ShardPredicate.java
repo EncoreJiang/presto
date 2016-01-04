@@ -14,11 +14,11 @@
 package com.facebook.presto.raptor.metadata;
 
 import com.facebook.presto.raptor.RaptorColumnHandle;
-import com.facebook.presto.spi.Domain;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.Range;
-import com.facebook.presto.spi.SortedRangeSet;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.Domain;
+import com.facebook.presto.spi.predicate.Range;
+import com.facebook.presto.spi.predicate.Ranges;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.BooleanType;
 import com.facebook.presto.spi.type.DateType;
@@ -39,12 +39,14 @@ import java.util.StringJoiner;
 import static com.facebook.presto.raptor.metadata.DatabaseShardManager.maxColumn;
 import static com.facebook.presto.raptor.metadata.DatabaseShardManager.minColumn;
 import static com.facebook.presto.raptor.storage.ShardStats.truncateIndexValue;
+import static com.facebook.presto.raptor.util.Types.checkType;
+import static com.facebook.presto.raptor.util.UuidUtil.uuidStringToBytes;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 class ShardPredicate
 {
@@ -54,9 +56,9 @@ class ShardPredicate
 
     private ShardPredicate(String predicate, List<JDBCType> types, List<Object> values)
     {
-        this.predicate = checkNotNull(predicate, "predicate is null");
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
-        this.values = ImmutableList.copyOf(checkNotNull(values, "values is null"));
+        this.predicate = requireNonNull(predicate, "predicate is null");
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+        this.values = ImmutableList.copyOf(requireNonNull(values, "values is null"));
         checkArgument(types.size() == values.size(), "types and values sizes do not match");
     }
 
@@ -89,7 +91,7 @@ class ShardPredicate
         ImmutableList.Builder<JDBCType> types = ImmutableList.builder();
         ImmutableList.Builder<Object> values = ImmutableList.builder();
 
-        for (Entry<RaptorColumnHandle, Domain> entry : tupleDomain.getDomains().entrySet()) {
+        for (Entry<RaptorColumnHandle, Domain> entry : tupleDomain.getDomains().get().entrySet()) {
             Domain domain = entry.getValue();
             if (domain.isNullAllowed() || domain.isAll()) {
                 continue;
@@ -102,12 +104,28 @@ class ShardPredicate
                 continue;
             }
 
+            if (handle.isShardUuid()) {
+                // TODO: support multiple shard UUIDs
+                if (domain.isSingleValue()) {
+                    predicate.add("shard_uuid = ?");
+                    types.add(jdbcType(type));
+                    Slice uuidSlice = checkType(entry.getValue().getSingleValue(), Slice.class, "value");
+                    values.add(uuidStringToBytes(uuidSlice));
+                }
+                continue;
+            }
+
+            if (!domain.getType().isOrderable()) {
+                continue;
+            }
+
+            Ranges ranges = domain.getValues().getRanges();
+
             // TODO: support multiple ranges
-            SortedRangeSet ranges = domain.getRanges();
             if (ranges.getRangeCount() != 1) {
                 continue;
             }
-            Range range = getOnlyElement(ranges.getRanges());
+            Range range = getOnlyElement(ranges.getOrderedRanges());
 
             Object minValue = null;
             Object maxValue = null;

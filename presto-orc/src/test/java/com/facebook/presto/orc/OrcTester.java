@@ -14,16 +14,15 @@
 package com.facebook.presto.orc;
 
 import com.facebook.hive.orc.OrcConf;
+import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.orc.metadata.DwrfMetadataReader;
 import com.facebook.presto.orc.metadata.MetadataReader;
 import com.facebook.presto.orc.metadata.OrcMetadataReader;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.VariableWidthBlockEncoding;
-import com.facebook.presto.spi.type.AbstractVariableWidthType;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.type.TypeRegistry;
 import com.google.common.base.Function;
 import com.google.common.base.Throwables;
 import com.google.common.collect.AbstractIterator;
@@ -33,7 +32,6 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.primitives.Ints;
-import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import io.airlift.units.DataSize.Unit;
 import org.apache.hadoop.fs.Path;
@@ -63,12 +61,12 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
 
@@ -77,12 +75,10 @@ import static com.facebook.presto.orc.OrcTester.Compression.ZLIB;
 import static com.facebook.presto.orc.OrcTester.Format.DWRF;
 import static com.facebook.presto.orc.OrcTester.Format.ORC_12;
 import static com.facebook.presto.orc.TestingOrcPredicate.createOrcPredicate;
-import static com.facebook.presto.orc.Vector.MAX_VECTOR_LENGTH;
 import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
 import static com.facebook.presto.spi.type.StandardTypes.MAP;
 import static com.facebook.presto.spi.type.StandardTypes.ROW;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.testing.TestingConnectorSession.SESSION;
 import static com.google.common.base.Functions.constant;
 import static com.google.common.collect.Iterables.transform;
 import static com.google.common.collect.Iterators.advance;
@@ -97,6 +93,8 @@ import static org.testng.Assert.assertTrue;
 public class OrcTester
 {
     public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("Asia/Katmandu");
+
+    private static final TypeManager TYPE_MANAGER = new TypeRegistry();
 
     public enum Format
     {
@@ -348,8 +346,8 @@ public class OrcTester
             throws IOException
     {
         OrcRecordReader recordReader = createCustomOrcRecordReader(tempFile, metadataReader, createOrcPredicate(objectInspector, expectedValues), type);
-
-        Vector vector = createResultsVector(objectInspector);
+        assertEquals(recordReader.getReaderPosition(), 0);
+        assertEquals(recordReader.getFilePosition(), 0);
 
         boolean isFirst = true;
         int rowsProcessed = 0;
@@ -363,71 +361,40 @@ public class OrcTester
                 isFirst = false;
             }
             else {
-                recordReader.readVector(0, vector);
-
-                ObjectVector objectVector = vector.toObjectVector(batchSize);
+                Block block = recordReader.readBlock(type, 0);
                 for (int i = 0; i < batchSize; i++) {
                     assertTrue(iterator.hasNext());
                     Object expected = iterator.next();
 
-                    Object actual = objectVector.vector[i];
-                    if (actual instanceof Slice) {
-                        actual = decodeSlice(type, (Slice) actual);
-                    }
+                    Object actual = decodeObject(type, block, i);
 
-                    if (!Objects.equals(actual, expected)) {
-                        assertEquals(actual, expected);
-                    }
+                    assertEquals(actual, expected);
                 }
             }
+            assertEquals(recordReader.getReaderPosition(), rowsProcessed);
+            assertEquals(recordReader.getFilePosition(), rowsProcessed);
             rowsProcessed += batchSize;
         }
         assertFalse(iterator.hasNext());
+
+        assertEquals(recordReader.getReaderPosition(), rowsProcessed);
+        assertEquals(recordReader.getFilePosition(), rowsProcessed);
         recordReader.close();
     }
 
-    private static Vector createResultsVector(ObjectInspector objectInspector)
-    {
-        if (!(objectInspector instanceof PrimitiveObjectInspector)) {
-            return new SliceVector(MAX_VECTOR_LENGTH);
-        }
-
-        PrimitiveObjectInspector primitiveObjectInspector = (PrimitiveObjectInspector) objectInspector;
-        PrimitiveCategory primitiveCategory = primitiveObjectInspector.getPrimitiveCategory();
-
-        switch (primitiveCategory) {
-            case BOOLEAN:
-                return new BooleanVector(MAX_VECTOR_LENGTH);
-            case BYTE:
-            case SHORT:
-            case INT:
-            case LONG:
-            case DATE:
-            case TIMESTAMP:
-                return new LongVector(MAX_VECTOR_LENGTH);
-            case FLOAT:
-            case DOUBLE:
-                return new DoubleVector(MAX_VECTOR_LENGTH);
-            case BINARY:
-            case STRING:
-                return new SliceVector(MAX_VECTOR_LENGTH);
-            default:
-                throw new IllegalArgumentException("Unsupported types " + primitiveCategory);
-        }
-    }
-
-    private static OrcRecordReader createCustomOrcRecordReader(TempFile tempFile, MetadataReader metadataReader, OrcPredicate predicate, Type type)
+    static OrcRecordReader createCustomOrcRecordReader(TempFile tempFile, MetadataReader metadataReader, OrcPredicate predicate, Type type)
             throws IOException
     {
         OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE));
-        OrcReader orcReader = new OrcReader(orcDataSource, metadataReader);
+        OrcReader orcReader = new OrcReader(orcDataSource, metadataReader, new DataSize(1, Unit.MEGABYTE), new DataSize(1, Unit.MEGABYTE));
 
         assertEquals(orcReader.getColumnNames(), ImmutableList.of("test"));
+        assertEquals(orcReader.getFooter().getRowsInRowGroup(), 10_000);
 
-        return orcReader.createRecordReader(ImmutableMap.of(0, type), predicate, HIVE_STORAGE_TIME_ZONE);
+        return orcReader.createRecordReader(ImmutableMap.of(0, type), predicate, HIVE_STORAGE_TIME_ZONE, new AggregatedMemoryContext());
     }
 
-    private static DataSize writeOrcColumn(File outputFile, Format format, Compression compression, ObjectInspector columnObjectInspector, Iterator<?> values)
+    static DataSize writeOrcColumn(File outputFile, Format format, Compression compression, ObjectInspector columnObjectInspector, Iterator<?> values)
             throws Exception
     {
         RecordWriter recordWriter;
@@ -437,7 +404,12 @@ public class OrcTester
         else {
             recordWriter = createOrcRecordWriter(outputFile, format, compression, columnObjectInspector);
         }
+        return writeOrcColumn(outputFile, format, recordWriter, columnObjectInspector, values);
+    }
 
+    static DataSize writeOrcColumn(File outputFile, Format format, RecordWriter recordWriter, ObjectInspector columnObjectInspector, Iterator<?> values)
+            throws Exception
+    {
         SettableStructObjectInspector objectInspector = createSettableStructObjectInspector("test", columnObjectInspector);
         Object row = objectInspector.create();
 
@@ -504,7 +476,7 @@ public class OrcTester
         }
     }
 
-    private static RecordWriter createOrcRecordWriter(File outputFile, Format format, Compression compression, ObjectInspector columnObjectInspector)
+    static RecordWriter createOrcRecordWriter(File outputFile, Format format, Compression compression, ObjectInspector columnObjectInspector)
             throws IOException
     {
         JobConf jobConf = new JobConf();
@@ -543,7 +515,7 @@ public class OrcTester
         );
     }
 
-    private static SettableStructObjectInspector createSettableStructObjectInspector(String name, ObjectInspector objectInspector)
+    static SettableStructObjectInspector createSettableStructObjectInspector(String name, ObjectInspector objectInspector)
     {
         return getStandardStructObjectInspector(ImmutableList.of(name), ImmutableList.of(objectInspector));
     }
@@ -556,12 +528,12 @@ public class OrcTester
         return orderTableProperties;
     }
 
-    private static class TempFile
+    static class TempFile
             implements Closeable
     {
         private final File file;
 
-        private TempFile(String prefix, String suffix)
+        public TempFile(String prefix, String suffix)
         {
             try {
                 file = File.createTempFile(prefix, suffix);
@@ -646,76 +618,56 @@ public class OrcTester
         return asList(input, input, input, input);
     }
 
-    private static Object decodeSlice(Type type, Slice slice)
+    private static Object decodeObject(Type type, Block block, int position)
     {
+        if (block.isNull(position)) {
+            return null;
+        }
+
         String base = type.getTypeSignature().getBase();
         if (base.equals(ARRAY)) {
-            Block block = new VariableWidthBlockEncoding().readBlock(slice.getInput());
+            Block arrayBlock = (Block) type.getObject(block, position);
 
             Type elementType = type.getTypeParameters().get(0);
 
             List<Object> array = new ArrayList<>();
-            for (int position = 0; position < block.getPositionCount(); position++) {
-                array.add(getBlockValue(block, position, elementType));
+            for (int entry = 0; entry < arrayBlock.getPositionCount(); entry++) {
+                array.add(decodeObject(elementType, arrayBlock, entry));
             }
             return array;
         }
-        else if (base.equals(ROW)) {
-            Block block = new VariableWidthBlockEncoding().readBlock(slice.getInput());
+        if (base.equals(ROW)) {
+            Block rowBlock = (Block) type.getObject(block, position);
 
             List<Type> fieldTypes = type.getTypeParameters();
 
             List<Object> row = new ArrayList<>();
-            for (int field = 0; field < block.getPositionCount(); field++) {
-                row.add(getBlockValue(block, field, fieldTypes.get(field)));
+            for (int field = 0; field < fieldTypes.size(); field++) {
+                row.add(decodeObject(fieldTypes.get(field), rowBlock, field));
             }
             return row;
         }
-        else if (base.equals(MAP)) {
-            Block block = new VariableWidthBlockEncoding().readBlock(slice.getInput());
+        if (base.equals(MAP)) {
+            Block mapBlock = (Block) type.getObject(block, position);
 
             Type keyType = type.getTypeParameters().get(0);
             Type valueType = type.getTypeParameters().get(1);
 
             Map<Object, Object> map = new LinkedHashMap<>();
-            int entryCount = block.getPositionCount() / 2;
+            int entryCount = mapBlock.getPositionCount() / 2;
             for (int entry = 0; entry < entryCount; entry++) {
                 int blockPosition = entry * 2;
-                Object key = getBlockValue(block, blockPosition, keyType);
+                Object key = decodeObject(keyType, mapBlock, blockPosition);
                 // null keys are not allowed
                 if (key != null) {
-                    Object value = getBlockValue(block, blockPosition + 1, valueType);
+                    Object value = decodeObject(valueType, mapBlock, blockPosition + 1);
                     map.put(key, value);
                 }
             }
             return map;
         }
-        if (type.equals(VARCHAR) || type.equals(VARBINARY)) {
-            return slice.toStringUtf8();
-        }
 
-        throw new IllegalArgumentException("Unsupported type: " + type);
-    }
-
-    private static Object getBlockValue(Block block, int position, Type type)
-    {
-        if (block.isNull(position)) {
-            return null;
-        }
-        Class<?> javaType = type.getJavaType();
-        if (javaType == boolean.class) {
-            return type.getBoolean(block, position);
-        }
-        if (javaType == long.class) {
-            return type.getLong(block, position);
-        }
-        if (javaType == double.class) {
-            return type.getDouble(block, position);
-        }
-        if (javaType == Slice.class) {
-            return decodeSlice(type, type.getSlice(block, position));
-        }
-        throw new IllegalArgumentException("Unsupported type: " + type);
+        return type.getObjectValue(SESSION, block, position);
     }
 
     private static boolean hasType(ObjectInspector objectInspector, PrimitiveCategory... types)
@@ -752,58 +704,17 @@ public class OrcTester
 
     private static Type arrayType(Type elementType)
     {
-        return new MockStructuralType(ARRAY, ImmutableList.of(elementType));
+        return TYPE_MANAGER.getParameterizedType(ARRAY, ImmutableList.of(elementType.getTypeSignature()), ImmutableList.of());
     }
 
     private static Type mapType(Type keyType, Type valueType)
     {
-        return new MockStructuralType(MAP, ImmutableList.of(keyType, valueType));
+        return TYPE_MANAGER.getParameterizedType(MAP, ImmutableList.of(keyType.getTypeSignature(), valueType.getTypeSignature()), ImmutableList.of());
     }
 
     private static Type rowType(Type... fieldTypes)
     {
-        return new MockStructuralType(ROW, ImmutableList.copyOf(fieldTypes));
-    }
-
-    private static class MockStructuralType
-            extends AbstractVariableWidthType
-    {
-        private final List<Type> types;
-
-        public MockStructuralType(String base, List<Type> types)
-        {
-            super(new TypeSignature(base, ImmutableList.copyOf(transform(types, Type::getTypeSignature)), ImmutableList.of()), Slice.class);
-            this.types = types;
-        }
-
-        @Override
-        public Object getObjectValue(ConnectorSession session, Block block, int position)
-        {
-            return null;
-        }
-
-        @Override
-        public void appendTo(Block block, int position, BlockBuilder blockBuilder)
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public List<Type> getTypeParameters()
-        {
-            return ImmutableList.copyOf(types);
-        }
-
-        @Override
-        public Slice getSlice(Block block, int position)
-        {
-            return block.getSlice(position, 0, block.getLength(position));
-        }
-
-        @Override
-        public void writeSlice(BlockBuilder blockBuilder, Slice value)
-        {
-            blockBuilder.writeBytes(value, 0, value.length()).closeEntry();
-        }
+        TypeSignature[] typeSignatures = Arrays.stream(fieldTypes).map(Type::getTypeSignature).toArray(TypeSignature[]::new);
+        return TYPE_MANAGER.getParameterizedType(ROW, ImmutableList.copyOf(typeSignatures), ImmutableList.of());
     }
 }

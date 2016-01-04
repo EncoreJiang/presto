@@ -15,14 +15,22 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
+import io.airlift.slice.SliceOutput;
+import io.airlift.slice.Slices;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Arrays;
+import java.util.List;
 
+import static com.facebook.presto.spi.block.BlockValidationUtil.checkValidPositions;
+import static io.airlift.slice.Slices.wrappedBooleanArray;
 import static java.util.Objects.requireNonNull;
 
 public class LazyFixedWidthBlock
         extends AbstractFixedWidthBlock
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(LazyFixedWidthBlock.class).instanceSize();
+
     private final int positionCount;
     private LazyBlockLoader<LazyFixedWidthBlock> loader;
     private Slice slice;
@@ -80,6 +88,36 @@ public class LazyFixedWidthBlock
     }
 
     @Override
+    public int getRetainedSizeInBytes()
+    {
+        // TODO: This should account for memory used by the loader.
+        long size = INSTANCE_SIZE + SizeOf.sizeOf(valueIsNull);
+        if (slice != null) {
+            size += slice.getRetainedSize();
+        }
+        if (size > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) size;
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        checkValidPositions(positions, positionCount);
+
+        assureLoaded();
+        SliceOutput newSlice = Slices.allocate(positions.size() * fixedSize).getOutput();
+        SliceOutput newValueIsNull = Slices.allocate(positions.size()).getOutput();
+
+        for (int position : positions) {
+            newValueIsNull.appendByte(valueIsNull[position] ? 1 : 0);
+            newSlice.appendBytes(getRawSlice().getBytes(position * fixedSize, fixedSize));
+        }
+        return new FixedWidthBlock(fixedSize, positions.size(), newSlice.slice(), newValueIsNull.slice());
+    }
+
+    @Override
     public Block getRegion(int positionOffset, int length)
     {
         if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
@@ -88,7 +126,21 @@ public class LazyFixedWidthBlock
 
         assureLoaded();
         Slice newSlice = slice.slice(positionOffset * fixedSize, length * fixedSize);
-        return new LazyFixedWidthBlock(fixedSize, length, loader, newSlice, Arrays.copyOfRange(valueIsNull, positionOffset, positionOffset + length));
+        boolean[] newValueIsNull = Arrays.copyOfRange(valueIsNull, positionOffset, positionOffset + length);
+        return new FixedWidthBlock(fixedSize, length, newSlice, wrappedBooleanArray(newValueIsNull));
+    }
+
+    @Override
+    public Block copyRegion(int positionOffset, int length)
+    {
+        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
+            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
+        }
+
+        assureLoaded();
+        Slice newSlice = Slices.copyOf(slice, positionOffset * fixedSize, length * fixedSize);
+        boolean[] newValueIsNull = Arrays.copyOfRange(valueIsNull, positionOffset, positionOffset + length);
+        return new FixedWidthBlock(fixedSize, length, newSlice, wrappedBooleanArray(newValueIsNull));
     }
 
     @Override

@@ -64,14 +64,15 @@
 
     <h2>Summary</h2>
 
-    <div class="sql"><pre><code id="query"></code></pre></div>
-
     <dl class="dl-horizontal">
         <dt>Query State</dt>
         <dd id="queryState"></dd>
 
         <dt>User</dt>
         <dd id="sessionUser"></dd>
+
+        <dt>Principal</dt>
+        <dd id="sessionPrincipal"></dd>
 
         <dt>Source</dt>
         <dd id="sessionSource"></dd>
@@ -84,6 +85,12 @@
 
         <dt>Elapsed</dt>
         <dd id="elapsedTime"></dd>
+
+        <dt>Queued</dt>
+        <dd id="queuedTime"></dd>
+
+        <dt>End Time</dt>
+        <dd id="endTime"></dd>
 
         <dt>Memory Pool</dt>
         <dd id="memoryPool"></dd>
@@ -106,8 +113,8 @@
         <dt>Execution</dt>
         <dd><a id="executionLink"></a></dd>
 
-        <dt>Kill</dt>
-        <dd id="killQuery"></dd>
+        <dt>Visualization</dt>
+        <dd><a id="timelineLink">Timeline</a></dd>
 
         <dt>Error Type</dt>
         <dd id="errorType"></dd>
@@ -120,7 +127,14 @@
 
         <dt>Session Properties</dt>
         <dd id="sessionProperties"></dd>
+
+        <dt>Kill</dt>
+        <dd id="killQuery"></dd>
     </dl>
+
+    <h2>Query</h2>
+
+    <div class="sql"><pre><code id="query"></code></pre></div>
 
     <h2>Stages</h2>
 
@@ -156,12 +170,27 @@
 d3.json('/v1/query/' + window.location.search.substring(1), function (query) {
     d3.select('#query').text(query.query);
     d3.select('#queryId').text(query.queryId);
-    d3.select('#queryState').text(query.state);
+    if (query.queryStats.fullyBlocked && query.state == "RUNNING") {
+        var state = "BLOCKED";
+        if (query.queryStats.blockedReasons.length > 0) {
+            state += " (" + query.queryStats.blockedReasons.join() + ")";
+        }
+        d3.select('#queryState').text(state);
+    }
+    else {
+        d3.select('#queryState').text(query.state);
+    }
     d3.select('#sessionUser').text(query.session.user);
+    d3.select('#sessionPrincipal').text(query.session.principal);
     d3.select('#sessionSource').text(query.session.source);
     d3.select('#sessionCatalog').text(query.session.catalog);
     d3.select('#sessionSchema').text(query.session.schema);
     d3.select('#elapsedTime').text(query.queryStats.elapsedTime);
+    d3.select('#queuedTime').text(query.queryStats.queuedTime);
+    if (query.queryStats.endTime) {
+        var formatter = d3.time.format("%x %X");
+        d3.select('#endTime').text(formatter(new Date(query.queryStats.endTime)));
+    }
     d3.select('#memoryPool').text(query.memoryPool);
     d3.select('#memory').text(query.queryStats.totalMemoryReservation);
     d3.select('#cpuTime').text(query.queryStats.totalCpuTime);
@@ -228,6 +257,9 @@ d3.json('/v1/query/' + window.location.search.substring(1), function (query) {
     var executionLink = "/ui/query-execution?" + query.queryId;
     d3.select('#executionLink').text(executionLink);
     d3.select('#executionLink').attr("href", executionLink);
+
+    var timelineLink = "/timeline.html?" + query.queryId;
+    d3.select('#timelineLink').attr("href", timelineLink);
 
     hljs.initHighlighting();
 
@@ -338,20 +370,38 @@ function taskData(d) {
     });
 
     return [
-        d.taskId,
-        d.self.replace(/http:\/\/([a-z0-9-.]+)[\/:].*/, '$1'),
-        d.state,
-        formatCount(rows),
-        formatCount(computeRate(rows, elapsed)),
-        formatDataSize(bytes),
-        formatDataSize(computeRate(bytes, elapsed)),
-        d.stats.queuedDrivers,
-        d.stats.runningDrivers,
-        d.stats.completedDrivers,
-        finishedBuffers + ' / ' + allBuffers,
-        bufferedPages
+        "<a href=" + d.self + "?pretty>" + htmlEscape(d.taskId) + "</a>",
+        htmlEscape(urlHostname(d.self)),
+        htmlEscape(formatState(d.state, d.stats.fullyBlocked)),
+        htmlEscape(formatCount(rows)),
+        htmlEscape(formatCount(computeRate(rows, elapsed))),
+        htmlEscape(formatDataSize(bytes)),
+        htmlEscape(formatDataSize(computeRate(bytes, elapsed))),
+        htmlEscape(d.stats.queuedDrivers),
+        htmlEscape(d.stats.runningDrivers),
+        htmlEscape(d.stats.completedDrivers),
+        htmlEscape(finishedBuffers + ' / ' + allBuffers),
+        htmlEscape(bufferedPages)
     ];
 }
+
+function urlHostname(url) {
+    var s = new URL(url).hostname;
+    if ((s.charAt(0) == '[') && (s.charAt(s.length - 1) == ']')) {
+        s = s.substr(1, s.length - 2);
+    }
+    return s;
+}
+
+function formatState(state, fullyBlocked) {
+    if (fullyBlocked && state == "RUNNING") {
+        return "BLOCKED";
+    }
+    else {
+        return state;
+    }
+}
+
 
 /** Computes rate per second **/
 function computeRate(count, ms) {
@@ -489,7 +539,7 @@ function renderTable(id, data) {
             })
             .enter()
             .append("td")
-            .text(function (d) {
+            .html(function (d) {
                 return d;
             });
 }
@@ -573,7 +623,7 @@ function renderStagesTree(source) {
                     return d.children || d._children ? "end" : "start";
                 })
                 .text(function (d) {
-                    return removeQueryId(d.stageId) + ' ' + d.state;
+                    return removeQueryId(d.stageId) + ' ' + formatState(d.state, d.stageStats.fullyBlocked);
                 })
                 .style("fill-opacity", 1e-6);
 

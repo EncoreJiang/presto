@@ -57,11 +57,15 @@ public class TestTimeZoneKey
         assertSame(TimeZoneKey.getTimeZoneKey("GMT0"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("GMT+0"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("GMT-0"), UTC_KEY);
+        assertSame(TimeZoneKey.getTimeZoneKey("GMT+00:00"), UTC_KEY);
+        assertSame(TimeZoneKey.getTimeZoneKey("GMT-00:00"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("+00:00"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("-00:00"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("etc/utc"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("etc/gmt"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("etc/gmt+0"), UTC_KEY);
+        assertSame(TimeZoneKey.getTimeZoneKey("etc/gmt+00:00"), UTC_KEY);
+        assertSame(TimeZoneKey.getTimeZoneKey("etc/gmt-00:00"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("etc/ut"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("etc/UT"), UTC_KEY);
         assertSame(TimeZoneKey.getTimeZoneKey("etc/UCT"), UTC_KEY);
@@ -188,6 +192,6 @@ public class TestTimeZoneKey
             hasher.putString(timeZoneKey.getId(), StandardCharsets.UTF_8);
         }
         // Zone file should not (normally) be changed, so let's make is more difficult
-        assertEquals(hasher.hash().asLong(), 7273867108989103529L, "zone-index.properties file contents changed!");
+        assertEquals(hasher.hash().asLong(), 5498515770239515435L, "zone-index.properties file contents changed!");
     }
 }

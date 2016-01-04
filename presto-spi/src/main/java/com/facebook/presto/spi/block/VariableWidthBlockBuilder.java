@@ -16,9 +16,13 @@ package com.facebook.presto.spi.block;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
+import io.airlift.slice.Slices;
+import org.openjdk.jol.info.ClassLayout;
 
+import java.util.List;
 import java.util.Objects;
 
+import static com.facebook.presto.spi.block.BlockValidationUtil.checkValidPositions;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
 import static io.airlift.slice.SizeOf.SIZE_OF_DOUBLE;
 import static io.airlift.slice.SizeOf.SIZE_OF_FLOAT;
@@ -30,6 +34,8 @@ public class VariableWidthBlockBuilder
         extends AbstractVariableWidthBlock
         implements BlockBuilder
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(VariableWidthBlockBuilder.class).instanceSize() + BlockBuilderStatus.INSTANCE_SIZE;
+
     private final BlockBuilderStatus blockBuilderStatus;
     private final SliceOutput sliceOutput;
     private final SliceOutput valueIsNull;
@@ -38,17 +44,12 @@ public class VariableWidthBlockBuilder
     private int positions;
     private int currentEntrySize;
 
-    public VariableWidthBlockBuilder(BlockBuilderStatus blockBuilderStatus)
-    {
-        this(blockBuilderStatus, (int) (blockBuilderStatus.getMaxBlockSizeInBytes() * 1.2));
-    }
-
-    public VariableWidthBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedSizeInBytes)
+    public VariableWidthBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedEntries, int expectedBytesPerEntry)
     {
         this.blockBuilderStatus = Objects.requireNonNull(blockBuilderStatus, "blockBuilderStatus is null");
-        this.sliceOutput = new DynamicSliceOutput(expectedSizeInBytes);
-        this.valueIsNull = new DynamicSliceOutput(1024);
-        this.offsets = new DynamicSliceOutput(1024 * SIZE_OF_INT);
+        this.sliceOutput = new DynamicSliceOutput(expectedBytesPerEntry * expectedEntries);
+        this.valueIsNull = new DynamicSliceOutput(expectedEntries);
+        this.offsets = new DynamicSliceOutput(SIZE_OF_INT * expectedEntries);
 
         offsets.appendInt(0);
     }
@@ -84,25 +85,45 @@ public class VariableWidthBlockBuilder
     }
 
     @Override
-    public boolean isEmpty()
-    {
-        return positions == 0;
-    }
-
-    @Override
-    public boolean isFull()
-    {
-        return blockBuilderStatus.isFull();
-    }
-
-    @Override
     public int getSizeInBytes()
     {
-        long size = sliceOutput.getUnderlyingSlice().length() + offsets.getUnderlyingSlice().length() + valueIsNull.getUnderlyingSlice().length();
+        long size = sliceOutput.size() + offsets.size() + valueIsNull.size();
         if (size > Integer.MAX_VALUE) {
             return Integer.MAX_VALUE;
         }
         return (int) size;
+    }
+
+    @Override
+    public int getRetainedSizeInBytes()
+    {
+        long size = INSTANCE_SIZE + sliceOutput.getUnderlyingSlice().getRetainedSize() + offsets.getUnderlyingSlice().getRetainedSize() + valueIsNull.getUnderlyingSlice().getRetainedSize();
+        if (size > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) size;
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        checkValidPositions(positions, this.positions);
+
+        int finalLength = positions.stream().mapToInt(this::getLength).sum();
+        SliceOutput newSlice = Slices.allocate(finalLength).getOutput();
+        SliceOutput newOffsets = Slices.allocate((positions.size() * SIZE_OF_INT) + SIZE_OF_INT).getOutput();
+        SliceOutput newValueIsNull = Slices.allocate(positions.size()).getOutput();
+
+        newOffsets.appendInt(0);
+        for (int position : positions) {
+            boolean isNull = isEntryNull(position);
+            newValueIsNull.appendByte(isNull ? 1 : 0);
+            if (!isNull) {
+                newSlice.appendBytes(sliceOutput.getUnderlyingSlice().getBytes(getPositionOffset(position), getLength(position)));
+            }
+            newOffsets.appendInt(newSlice.size());
+        }
+        return new VariableWidthBlock(positions.size(), newSlice.slice(), newOffsets.slice(), newValueIsNull.slice());
     }
 
     @Override
@@ -188,9 +209,6 @@ public class VariableWidthBlockBuilder
         offsets.appendInt(sliceOutput.size());
 
         blockBuilderStatus.addBytes(SIZE_OF_BYTE + SIZE_OF_INT + bytesWritten);
-        if (sliceOutput.size() + valueIsNull.size() + offsets.size() >= blockBuilderStatus.getMaxBlockSizeInBytes()) {
-            blockBuilderStatus.setFull();
-        }
     }
 
     @Override
@@ -209,6 +227,19 @@ public class VariableWidthBlockBuilder
 
         Slice newOffsets = offsets.getUnderlyingSlice().slice(positionOffset * SIZE_OF_INT, (length + 1) * SIZE_OF_INT);
         Slice newValueIsNull = valueIsNull.getUnderlyingSlice().slice(positionOffset, length);
+        return new VariableWidthBlock(length, sliceOutput.slice(), newOffsets, newValueIsNull);
+    }
+
+    @Override
+    public Block copyRegion(int positionOffset, int length)
+    {
+        int positionCount = getPositionCount();
+        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
+            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
+        }
+
+        Slice newOffsets = Slices.copyOf(offsets.getUnderlyingSlice(), positionOffset * SIZE_OF_INT, (length + 1) * SIZE_OF_INT);
+        Slice newValueIsNull = Slices.copyOf(valueIsNull.getUnderlyingSlice(), positionOffset, length);
         return new VariableWidthBlock(length, sliceOutput.slice(), newOffsets, newValueIsNull);
     }
 

@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.orc;
 
+import com.facebook.presto.orc.memory.AbstractAggregatedMemoryContext;
+import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.orc.metadata.CompressionKind;
 import com.facebook.presto.orc.metadata.Footer;
 import com.facebook.presto.orc.metadata.Metadata;
@@ -25,6 +27,7 @@ import com.google.common.primitives.Ints;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.airlift.units.DataSize;
 import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
@@ -32,11 +35,14 @@ import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.slice.SizeOf.SIZE_OF_BYTE;
+import static java.lang.Math.min;
+import static java.util.Objects.requireNonNull;
 
 public class OrcReader
 {
+    public static final int MAX_BATCH_SIZE = 1024;
+
     private static final Logger log = Logger.get(OrcReader.class);
 
     private static final Slice MAGIC = Slices.utf8Slice("ORC");
@@ -46,17 +52,22 @@ public class OrcReader
 
     private final OrcDataSource orcDataSource;
     private final MetadataReader metadataReader;
+    private final DataSize maxMergeDistance;
+    private final DataSize maxReadSize;
     private final CompressionKind compressionKind;
     private final int bufferSize;
     private final Footer footer;
     private final Metadata metadata;
 
     // This is based on the Apache Hive ORC code
-    public OrcReader(OrcDataSource orcDataSource, MetadataReader metadataReader)
+    public OrcReader(OrcDataSource orcDataSource, MetadataReader metadataReader, DataSize maxMergeDistance, DataSize maxReadSize)
             throws IOException
     {
-        this.orcDataSource = checkNotNull(orcDataSource, "orcDataSource is null");
-        this.metadataReader = checkNotNull(metadataReader, "metadataReader is null");
+        orcDataSource = wrapWithCacheIfTiny(requireNonNull(orcDataSource, "orcDataSource is null"), maxMergeDistance);
+        this.orcDataSource = orcDataSource;
+        this.metadataReader = requireNonNull(metadataReader, "metadataReader is null");
+        this.maxMergeDistance = requireNonNull(maxMergeDistance, "maxMergeDistance is null");
+        this.maxReadSize = requireNonNull(maxReadSize, "maxReadSize is null");
 
         //
         // Read the file tail:
@@ -74,7 +85,7 @@ public class OrcReader
         }
 
         // Read the tail of the file
-        byte[] buffer = new byte[(int) Math.min(size, EXPECTED_FOOTER_SIZE)];
+        byte[] buffer = new byte[Ints.checkedCast(min(size, EXPECTED_FOOTER_SIZE))];
         orcDataSource.readFully(size - buffer.length, buffer);
 
         // get length of PostScript - last byte of the file
@@ -119,13 +130,15 @@ public class OrcReader
 
         // read metadata
         Slice metadataSlice = completeFooterSlice.slice(0, metadataSize);
-        InputStream metadataInputStream = new OrcInputStream(orcDataSource.toString(), metadataSlice.getInput(), compressionKind, bufferSize);
-        this.metadata = metadataReader.readMetadata(metadataInputStream);
+        try (InputStream metadataInputStream = new OrcInputStream(orcDataSource.toString(), metadataSlice.getInput(), compressionKind, bufferSize, new AggregatedMemoryContext())) {
+            this.metadata = metadataReader.readMetadata(metadataInputStream);
+        }
 
         // read footer
         Slice footerSlice = completeFooterSlice.slice(metadataSize, footerSize);
-        InputStream footerInputStream = new OrcInputStream(orcDataSource.toString(), footerSlice.getInput(), compressionKind, bufferSize);
-        this.footer = metadataReader.readFooter(footerInputStream);
+        try (InputStream footerInputStream = new OrcInputStream(orcDataSource.toString(), footerSlice.getInput(), compressionKind, bufferSize, new AggregatedMemoryContext())) {
+            this.footer = metadataReader.readFooter(footerInputStream);
+        }
     }
 
     public List<String> getColumnNames()
@@ -153,10 +166,10 @@ public class OrcReader
         return bufferSize;
     }
 
-    public OrcRecordReader createRecordReader(Map<Integer, Type> includedColumns, OrcPredicate predicate, DateTimeZone hiveStorageTimeZone)
+    public OrcRecordReader createRecordReader(Map<Integer, Type> includedColumns, OrcPredicate predicate, DateTimeZone hiveStorageTimeZone, AbstractAggregatedMemoryContext systemMemoryUsage)
             throws IOException
     {
-        return createRecordReader(includedColumns, predicate, 0, orcDataSource.getSize(), hiveStorageTimeZone);
+        return createRecordReader(includedColumns, predicate, 0, orcDataSource.getSize(), hiveStorageTimeZone, systemMemoryUsage);
     }
 
     public OrcRecordReader createRecordReader(
@@ -164,12 +177,13 @@ public class OrcReader
             OrcPredicate predicate,
             long offset,
             long length,
-            DateTimeZone hiveStorageTimeZone)
+            DateTimeZone hiveStorageTimeZone,
+            AbstractAggregatedMemoryContext systemMemoryUsage)
             throws IOException
     {
         return new OrcRecordReader(
-                checkNotNull(includedColumns, "includedColumns is null"),
-                checkNotNull(predicate, "predicate is null"),
+                requireNonNull(includedColumns, "includedColumns is null"),
+                requireNonNull(predicate, "predicate is null"),
                 footer.getNumberOfRows(),
                 footer.getStripes(),
                 footer.getFileStats(),
@@ -181,8 +195,23 @@ public class OrcReader
                 compressionKind,
                 bufferSize,
                 footer.getRowsInRowGroup(),
-                checkNotNull(hiveStorageTimeZone, "hiveStorageTimeZone is null"),
-                metadataReader);
+                requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null"),
+                metadataReader,
+                maxMergeDistance,
+                maxReadSize,
+                systemMemoryUsage);
+    }
+
+    private static OrcDataSource wrapWithCacheIfTiny(OrcDataSource dataSource, DataSize maxCacheSize)
+    {
+        if (dataSource instanceof CachingOrcDataSource) {
+            return dataSource;
+        }
+        if (dataSource.getSize() > maxCacheSize.toBytes()) {
+            return dataSource;
+        }
+        DiskRange diskRange = new DiskRange(0, Ints.checkedCast(dataSource.getSize()));
+        return new CachingOrcDataSource(dataSource, desiredOffset -> diskRange);
     }
 
     /**

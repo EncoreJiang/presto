@@ -17,7 +17,7 @@ import com.facebook.presto.spi.ConnectorOutputTableHandle;
 
 import javax.inject.Inject;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class OutputTableHandleJacksonModule
         extends AbstractTypedJacksonModule<ConnectorOutputTableHandle>
@@ -25,7 +25,7 @@ public class OutputTableHandleJacksonModule
     @Inject
     public OutputTableHandleJacksonModule(HandleResolver handleResolver)
     {
-        super(ConnectorOutputTableHandle.class, "type", new OutputTableHandleJsonTypeIdResolver(handleResolver));
+        super(ConnectorOutputTableHandle.class, new OutputTableHandleJsonTypeIdResolver(handleResolver));
     }
 
     private static class OutputTableHandleJsonTypeIdResolver
@@ -35,7 +35,7 @@ public class OutputTableHandleJacksonModule
 
         private OutputTableHandleJsonTypeIdResolver(HandleResolver handleResolver)
         {
-            this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
+            this.handleResolver = requireNonNull(handleResolver, "handleResolver is null");
         }
 
         @Override

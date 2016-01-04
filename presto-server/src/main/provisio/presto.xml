@@ -26,6 +26,12 @@
     </artifactSet>
 
     <!-- Plugins -->
+    <artifactSet to="plugin/jmx">
+        <artifact id="${project.groupId}:presto-jmx:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
     <artifactSet to="plugin/cassandra">
         <artifact id="${project.groupId}:presto-cassandra:zip:${project.version}">
             <unpack />
@@ -62,6 +68,12 @@
         </artifact>
     </artifactSet>
 
+    <artifactSet to="plugin/blackhole">
+        <artifact id="${project.groupId}:presto-blackhole:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
     <artifactSet to="plugin/kafka">
         <artifact id="${project.groupId}:presto-kafka:zip:${project.version}">
             <unpack />
@@ -92,8 +104,20 @@
         </artifact>
     </artifactSet>
 
+    <artifactSet to="plugin/redis">
+        <artifact id="${project.groupId}:presto-redis:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
     <artifactSet to="plugin/tpch">
         <artifact id="${project.groupId}:presto-tpch:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
+    <artifactSet to="plugin/teradata-functions">
+        <artifact id="${project.groupId}:presto-teradata-functions:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>

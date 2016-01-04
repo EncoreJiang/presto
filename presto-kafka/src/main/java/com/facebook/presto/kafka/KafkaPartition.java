@@ -16,13 +16,13 @@ package com.facebook.presto.kafka;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPartition;
 import com.facebook.presto.spi.HostAddress;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Kafka specific partition representation. Each partition maps to a topic partition and is split along segment boundaries.
@@ -40,10 +40,10 @@ public class KafkaPartition
             HostAddress partitionLeader,
             List<HostAddress> partitionNodes)
     {
-        this.topicName = checkNotNull(topicName, "schema name is null");
+        this.topicName = requireNonNull(topicName, "schema name is null");
         this.partitionId = partitionId;
-        this.partitionLeader = checkNotNull(partitionLeader, "partitionLeader is null");
-        this.partitionNodes = ImmutableList.copyOf(checkNotNull(partitionNodes, "partitionNodes is null"));
+        this.partitionLeader = requireNonNull(partitionLeader, "partitionLeader is null");
+        this.partitionNodes = ImmutableList.copyOf(requireNonNull(partitionNodes, "partitionNodes is null"));
     }
 
     @Override

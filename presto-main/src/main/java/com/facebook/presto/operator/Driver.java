@@ -17,6 +17,7 @@ import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.TaskSource;
 import com.facebook.presto.metadata.Split;
 import com.facebook.presto.spi.Page;
+import com.facebook.presto.spi.UpdatablePageSource;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
@@ -30,11 +31,13 @@ import io.airlift.units.Duration;
 
 import javax.annotation.concurrent.GuardedBy;
 
+import java.io.Closeable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -42,11 +45,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 
 import static com.facebook.presto.operator.Operator.NOT_BLOCKED;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 //
 // NOTE:  As a general strategy the methods should "stage" a change and only
@@ -55,12 +59,14 @@ import static com.google.common.base.Preconditions.checkState;
 // time and state changer threads are not blocked.
 //
 public class Driver
+        implements Closeable
 {
     private static final Logger log = Logger.get(Driver.class);
 
     private final DriverContext driverContext;
     private final List<Operator> operators;
     private final Map<PlanNodeId, SourceOperator> sourceOperators;
+    private final Optional<DeleteOperator> deleteOperator;
     private final ConcurrentMap<PlanNodeId, TaskSource> newSources = new ConcurrentHashMap<>();
 
     private final AtomicReference<State> state = new AtomicReference<>(State.ALIVE);
@@ -80,27 +86,33 @@ public class Driver
 
     public Driver(DriverContext driverContext, Operator firstOperator, Operator... otherOperators)
     {
-        this(checkNotNull(driverContext, "driverContext is null"),
+        this(requireNonNull(driverContext, "driverContext is null"),
                 ImmutableList.<Operator>builder()
-                        .add(checkNotNull(firstOperator, "firstOperator is null"))
-                        .add(checkNotNull(otherOperators, "otherOperators is null"))
+                        .add(requireNonNull(firstOperator, "firstOperator is null"))
+                        .add(requireNonNull(otherOperators, "otherOperators is null"))
                         .build());
     }
 
     public Driver(DriverContext driverContext, List<Operator> operators)
     {
-        this.driverContext = checkNotNull(driverContext, "driverContext is null");
-        this.operators = ImmutableList.copyOf(checkNotNull(operators, "operators is null"));
+        this.driverContext = requireNonNull(driverContext, "driverContext is null");
+        this.operators = ImmutableList.copyOf(requireNonNull(operators, "operators is null"));
         checkArgument(!operators.isEmpty(), "There must be at least one operator");
 
         ImmutableMap.Builder<PlanNodeId, SourceOperator> sourceOperators = ImmutableMap.builder();
+        Optional<DeleteOperator> deleteOperator = Optional.empty();
         for (Operator operator : operators) {
             if (operator instanceof SourceOperator) {
                 SourceOperator sourceOperator = (SourceOperator) operator;
                 sourceOperators.put(sourceOperator.getSourceId(), sourceOperator);
             }
+            else if (operator instanceof DeleteOperator) {
+                checkArgument(!deleteOperator.isPresent(), "There must be at most one DeleteOperator");
+                deleteOperator = Optional.of((DeleteOperator) operator);
+            }
         }
         this.sourceOperators = sourceOperators.build();
+        this.deleteOperator = deleteOperator;
     }
 
     public DriverContext getDriverContext()
@@ -113,6 +125,7 @@ public class Driver
         return sourceOperators.keySet();
     }
 
+    @Override
     public void close()
     {
         // mark the service for destruction
@@ -260,7 +273,10 @@ public class Driver
 
             SourceOperator sourceOperator = sourceOperators.get(source.getPlanNodeId());
             if (sourceOperator != null) {
-                sourceOperator.addSplit(split);
+                Supplier<Optional<UpdatablePageSource>> pageSource = sourceOperator.addSplit(split);
+                if (deleteOperator.isPresent()) {
+                    deleteOperator.get().setPageSource(pageSource);
+                }
             }
         }
 
@@ -274,7 +290,7 @@ public class Driver
     {
         checkLockNotHeld("Can not process for a duration while holding the driver lock");
 
-        checkNotNull(duration, "duration is null");
+        requireNonNull(duration, "duration is null");
 
         long maxRuntime = duration.roundTo(TimeUnit.NANOSECONDS);
 
@@ -454,6 +470,17 @@ public class Driver
                             inFlightException,
                             t,
                             "Error freeing memory for operator %s for task %s",
+                            operator.getOperatorContext().getOperatorId(),
+                            driverContext.getTaskId());
+                }
+                try {
+                    operator.getOperatorContext().closeSystemMemoryContext();
+                }
+                catch (Throwable t) {
+                    inFlightException = addSuppressedException(
+                            inFlightException,
+                            t,
+                            "Error freeing system memory for operator %s for task %s",
                             operator.getOperatorContext().getOperatorId(),
                             driverContext.getTaskId());
                 }

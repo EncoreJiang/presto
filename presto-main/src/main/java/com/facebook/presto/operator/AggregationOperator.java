@@ -26,8 +26,8 @@ import java.util.List;
 
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Group input data and produce a single block for each sequence of identical values.
@@ -71,6 +71,12 @@ public class AggregationOperator
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new AggregationOperatorFactory(operatorId, step, accumulatorFactories);
+        }
     }
 
     private enum State
@@ -88,10 +94,10 @@ public class AggregationOperator
 
     public AggregationOperator(OperatorContext operatorContext, Step step, List<AccumulatorFactory> accumulatorFactories)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
 
-        checkNotNull(step, "step is null");
-        checkNotNull(accumulatorFactories, "accumulatorFactories is null");
+        requireNonNull(step, "step is null");
+        requireNonNull(accumulatorFactories, "accumulatorFactories is null");
 
         this.types = toTypes(step, accumulatorFactories);
 
@@ -139,7 +145,7 @@ public class AggregationOperator
     public void addInput(Page page)
     {
         checkState(needsInput(), "Operator is already finishing");
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
 
         long memorySize = 0;
         for (Aggregator aggregate : aggregates) {
@@ -190,6 +196,8 @@ public class AggregationOperator
 
         private Aggregator(AccumulatorFactory accumulatorFactory, Step step)
         {
+            checkArgument(step != Step.INTERMEDIATE, "intermediate aggregation not supported");
+
             if (step == Step.FINAL) {
                 checkArgument(accumulatorFactory.getInputChannels().size() == 1, "expected 1 input channel for intermediate aggregation");
                 intermediateChannel = accumulatorFactory.getInputChannels().get(0);

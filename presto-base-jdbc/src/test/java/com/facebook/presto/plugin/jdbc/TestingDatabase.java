@@ -14,10 +14,9 @@
 package com.facebook.presto.plugin.jdbc;
 
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.ConnectorPartitionResult;
 import com.facebook.presto.spi.ConnectorSplitSource;
 import com.facebook.presto.spi.SchemaTableName;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.ImmutableMap;
 import org.h2.Driver;
 
@@ -29,6 +28,7 @@ import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static io.airlift.concurrent.MoreFutures.getFutureValue;
 
 final class TestingDatabase
         implements AutoCloseable
@@ -60,9 +60,14 @@ final class TestingDatabase
                 "('eleven', 11)," +
                 "('twelve', 12)" +
                 "");
+        connection.createStatement().execute("CREATE TABLE example.view_source(id varchar primary key)");
+        connection.createStatement().execute("CREATE VIEW example.view AS SELECT id FROM example.view_source");
         connection.createStatement().execute("CREATE SCHEMA tpch");
         connection.createStatement().execute("CREATE TABLE tpch.orders(orderkey bigint primary key, custkey bigint)");
         connection.createStatement().execute("CREATE TABLE tpch.lineitem(orderkey bigint primary key, partkey bigint)");
+
+        connection.createStatement().execute("CREATE SCHEMA exa_ple");
+        connection.createStatement().execute("CREATE TABLE exa_ple.num_ers(te_t varchar primary key, \"VA%UE\" bigint)");
 
         connection.commit();
     }
@@ -88,9 +93,9 @@ final class TestingDatabase
             throws InterruptedException
     {
         JdbcTableHandle jdbcTableHandle = jdbcClient.getTableHandle(new SchemaTableName(schemaName, tableName));
-        ConnectorPartitionResult partitions = jdbcClient.getPartitions(jdbcTableHandle, TupleDomain.<ColumnHandle>all());
-        ConnectorSplitSource splits = jdbcClient.getPartitionSplits((JdbcPartition) getOnlyElement(partitions.getPartitions()));
-        return (JdbcSplit) getOnlyElement(splits.getNextBatch(1000));
+        JdbcTableLayoutHandle jdbcLayoutHandle = new JdbcTableLayoutHandle(jdbcTableHandle, TupleDomain.<ColumnHandle>all());
+        ConnectorSplitSource splits = jdbcClient.getSplits(jdbcLayoutHandle);
+        return (JdbcSplit) getOnlyElement(getFutureValue(splits.getNextBatch(1000)));
     }
 
     public Map<String, JdbcColumnHandle> getColumnHandles(String schemaName, String tableName)

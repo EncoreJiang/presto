@@ -15,6 +15,8 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.Slice;
 
+import java.util.List;
+
 public interface Block
 {
     /**
@@ -58,6 +60,14 @@ public interface Block
     Slice getSlice(int position, int offset, int length);
 
     /**
+     * Gets an object in the value at {@code position}.
+     */
+    default <T> T getObject(int position, Class<T> clazz)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
      * Is the byte sequences at {@code offset} in the value at {@code position} equal
      * to the byte sequence at {@code otherOffset} in {@code otherSlice}.
      */
@@ -74,6 +84,11 @@ public interface Block
      * to {@code blockBuilder}.
      */
     void writeBytesTo(int position, int offset, int length, BlockBuilder blockBuilder);
+
+    /**
+     * Appends the value at {@code position} to {@code blockBuilder}.
+     */
+    void writePositionTo(int position, BlockBuilder blockBuilder);
 
     /**
      * Is the byte sequences at {@code offset} in the value at {@code position} equal
@@ -112,14 +127,27 @@ public interface Block
     int getPositionCount();
 
     /**
-     * Returns the size of this block in memory.
+     * Returns the logical size of this block in memory.
      */
     int getSizeInBytes();
+
+    /**
+     * Returns the retained size of this block in memory.
+     */
+    int getRetainedSizeInBytes();
 
     /**
      * Get the encoding for this block.
      */
     BlockEncoding getEncoding();
+
+    /**
+     * Returns a block containing the specified positions.
+     * All specified positions must be valid for this block.
+     *
+     * The returned block must be a compact representation of the original block.
+     */
+    Block copyPositions(List<Integer> positions);
 
     /**
      * Returns a block starting at the specified position and extends for the
@@ -131,6 +159,18 @@ public interface Block
      * this block may also be released.
      */
     Block getRegion(int positionOffset, int length);
+
+    /**
+     * Returns a block starting at the specified position and extends for the
+     * specified length.  The specified region must be entirely contained
+     * within this block.
+     *
+     * The region returned must be a compact representation of the original block, unless their internal
+     * representation will be exactly the same. This method is useful for
+     * operators that hold on to a range of values without holding on to the
+     * entire block.
+     */
+    Block copyRegion(int position, int length);
 
     /**
      * Is the specified position null?

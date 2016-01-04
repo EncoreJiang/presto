@@ -16,6 +16,8 @@ package com.facebook.presto.raptor.util;
 //import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 //import static java.util.Locale.ENGLISH;
+import static com.google.common.base.Preconditions.checkArgument;
+import static java.lang.String.format;
 
 public final class MetadataUtil
 {
@@ -35,6 +37,9 @@ public final class MetadataUtil
     {
         checkNotNull(value, "%s is null", name);
         //checkArgument(value.equals(value.toLowerCase(ENGLISH)), "%s is not lowercase", name);
+        if (value == null) {
+            throw new NullPointerException(format("%s is null", name));
+        }
         return value;
     }
 }

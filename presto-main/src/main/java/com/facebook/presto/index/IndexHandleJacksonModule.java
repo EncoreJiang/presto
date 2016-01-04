@@ -20,7 +20,7 @@ import com.facebook.presto.spi.ConnectorIndexHandle;
 
 import javax.inject.Inject;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class IndexHandleJacksonModule
         extends AbstractTypedJacksonModule<ConnectorIndexHandle>
@@ -28,7 +28,7 @@ public class IndexHandleJacksonModule
     @Inject
     public IndexHandleJacksonModule(HandleResolver handleResolver)
     {
-        super(ConnectorIndexHandle.class, "type", new IndexHandleJsonTypeIdResolver(handleResolver));
+        super(ConnectorIndexHandle.class, new IndexHandleJsonTypeIdResolver(handleResolver));
     }
 
     private static class IndexHandleJsonTypeIdResolver
@@ -38,7 +38,7 @@ public class IndexHandleJacksonModule
 
         private IndexHandleJsonTypeIdResolver(HandleResolver handleResolver)
         {
-            this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
+            this.handleResolver = requireNonNull(handleResolver, "handleResolver is null");
         }
 
         @Override

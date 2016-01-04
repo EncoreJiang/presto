@@ -25,8 +25,10 @@ import com.mysql.jdbc.Driver;
 import javax.inject.Inject;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Set;
 
 //import static java.util.Locale.ENGLISH;
@@ -72,11 +74,28 @@ public class MySqlClient
     }
 
     @Override
+    public Statement getStatement(Connection connection)
+            throws SQLException
+    {
+        Statement statement = connection.createStatement();
+        if (statement.isWrapperFor(com.mysql.jdbc.Statement.class)) {
+            statement.unwrap(com.mysql.jdbc.Statement.class).enableStreamingResults();
+        }
+        return statement;
+    }
+
+    @Override
     protected ResultSet getTables(Connection connection, String schemaName, String tableName)
             throws SQLException
     {
         // MySQL maps their "database" to SQL catalogs and does not have schemas
-        return connection.getMetaData().getTables(schemaName, null, tableName, new String[] {"TABLE"});
+        DatabaseMetaData metadata = connection.getMetaData();
+        String escape = metadata.getSearchStringEscape();
+        return metadata.getTables(
+                schemaName,
+                null,
+                escapeNamePattern(tableName, escape),
+                new String[] {"TABLE", "VIEW"});
     }
 
     @Override
@@ -87,7 +106,6 @@ public class MySqlClient
         return new SchemaTableName(
                 resultSet.getString("TABLE_CAT"),
                 resultSet.getString("TABLE_NAME"));
-
     }
 
     @Override

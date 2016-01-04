@@ -85,7 +85,7 @@ public class TestHashSemiJoinOperator
                 .row(37)
                 .row(50)
                 .build());
-        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes(), 0, rowPagesBuilder.getHashChannel(), 10);
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes().get(0), 0, rowPagesBuilder.getHashChannel(), 10);
         Operator setBuilderOperator = setBuilderOperatorFactory.createOperator(driverContext);
 
         Driver driver = new Driver(driverContext, buildOperator, setBuilderOperator);
@@ -103,8 +103,7 @@ public class TestHashSemiJoinOperator
                 2,
                 setBuilderOperatorFactory.getSetProvider(),
                 rowPagesBuilderProbe.getTypes(),
-                0,
-                rowPagesBuilderProbe.getHashChannel());
+                0);
         Operator joinOperator = joinOperatorFactory.createOperator(driverContext);
 
         // expected
@@ -142,7 +141,7 @@ public class TestHashSemiJoinOperator
                 .row(3)
                 .row((Object) null)
                 .build());
-        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes(), 0, rowPagesBuilder.getHashChannel(), 10);
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes().get(0), 0, rowPagesBuilder.getHashChannel(), 10);
         Operator setBuilderOperator = setBuilderOperatorFactory.createOperator(driverContext);
 
         Driver driver = new Driver(driverContext, buildOperator, setBuilderOperator);
@@ -160,8 +159,7 @@ public class TestHashSemiJoinOperator
                 2,
                 setBuilderOperatorFactory.getSetProvider(),
                 rowPagesBuilderProbe.getTypes(),
-                0,
-                rowPagesBuilderProbe.getHashChannel());
+                0);
         Operator joinOperator = joinOperatorFactory.createOperator(driverContext);
 
         // expected
@@ -190,7 +188,7 @@ public class TestHashSemiJoinOperator
                 .row(1)
                 .row(3)
                 .build());
-        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes(), 0, rowPagesBuilder.getHashChannel(), 10);
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes().get(0), 0, rowPagesBuilder.getHashChannel(), 10);
         Operator setBuilderOperator = setBuilderOperatorFactory.createOperator(driverContext);
 
         Driver driver = new Driver(driverContext, buildOperator, setBuilderOperator);
@@ -211,8 +209,7 @@ public class TestHashSemiJoinOperator
                 2,
                 setBuilderOperatorFactory.getSetProvider(),
                 rowPagesBuilderProbe.getTypes(),
-                0,
-                rowPagesBuilderProbe.getHashChannel());
+                0);
         Operator joinOperator = joinOperatorFactory.createOperator(driverContext);
 
         // expected
@@ -242,7 +239,7 @@ public class TestHashSemiJoinOperator
                 .row((Object) null)
                 .row(3)
                 .build());
-        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes(), 0, rowPagesBuilder.getHashChannel(), 10);
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes().get(0), 0, rowPagesBuilder.getHashChannel(), 10);
         Operator setBuilderOperator = setBuilderOperatorFactory.createOperator(driverContext);
 
         Driver driver = new Driver(driverContext, buildOperator, setBuilderOperator);
@@ -263,8 +260,7 @@ public class TestHashSemiJoinOperator
                 2,
                 setBuilderOperatorFactory.getSetProvider(),
                 rowPagesBuilderProbe.getTypes(),
-                0,
-                rowPagesBuilderProbe.getHashChannel());
+                0);
         Operator joinOperator = joinOperatorFactory.createOperator(driverContext);
 
         // expected
@@ -278,7 +274,7 @@ public class TestHashSemiJoinOperator
         OperatorAssertion.assertOperatorEquals(joinOperator, probeInput, expected, hashEnabled, ImmutableList.of(probeTypes.size()));
     }
 
-    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Task exceeded max memory size.*")
+    @Test(dataProvider = "hashEnabledValues", expectedExceptions = ExceededMemoryLimitException.class, expectedExceptionsMessageRegExp = "Query exceeded local memory limit of.*")
     public void testMemoryLimit(boolean hashEnabled)
             throws Exception
     {
@@ -292,7 +288,7 @@ public class TestHashSemiJoinOperator
         Operator buildOperator = new ValuesOperator(operatorContext, buildTypes, rowPagesBuilder
                 .addSequencePage(10000, 20)
                 .build());
-        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes(), 0, rowPagesBuilder.getHashChannel(), 10);
+        SetBuilderOperatorFactory setBuilderOperatorFactory = new SetBuilderOperatorFactory(1, buildOperator.getTypes().get(0), 0, rowPagesBuilder.getHashChannel(), 10);
         Operator setBuilderOperator = setBuilderOperatorFactory.createOperator(driverContext);
 
         Driver driver = new Driver(driverContext, buildOperator, setBuilderOperator);

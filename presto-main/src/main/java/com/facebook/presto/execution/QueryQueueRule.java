@@ -24,9 +24,8 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Strings.nullToEmpty;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public class QueryQueueRule
 {
@@ -41,8 +40,8 @@ public class QueryQueueRule
     {
         this.userRegex = userRegex;
         this.sourceRegex = sourceRegex;
-        this.sessionPropertyRegexes = ImmutableMap.copyOf(checkNotNull(sessionPropertyRegexes, "sessionPropertyRegexes is null"));
-        checkNotNull(queues, "queues is null");
+        this.sessionPropertyRegexes = ImmutableMap.copyOf(requireNonNull(sessionPropertyRegexes, "sessionPropertyRegexes is null"));
+        requireNonNull(queues, "queues is null");
         checkArgument(!queues.isEmpty(), "queues is empty");
         this.queues = ImmutableList.copyOf(queues);
     }
@@ -70,8 +69,8 @@ public class QueryQueueRule
             return null;
         }
         if (sourceRegex != null) {
-            String source = session.getSource();
-            if (!sourceRegex.matcher(nullToEmpty(source)).matches()) {
+            String source = session.getSource().orElse("");
+            if (!sourceRegex.matcher(source).matches()) {
                 return null;
             }
         }

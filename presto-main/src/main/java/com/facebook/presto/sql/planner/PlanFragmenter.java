@@ -14,16 +14,16 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
+import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.google.common.collect.ImmutableList;
@@ -50,23 +50,30 @@ public class PlanFragmenter
         Fragmenter fragmenter = new Fragmenter(plan.getSymbolAllocator().getTypes());
 
         FragmentProperties properties = new FragmentProperties();
-        PlanNode root = PlanRewriter.rewriteWith(fragmenter, plan.getRoot(), properties);
+        PlanNode root = SimplePlanRewriter.rewriteWith(fragmenter, plan.getRoot(), properties);
 
-        SubPlan result = fragmenter.buildFragment(root, properties);
+        SubPlan result = fragmenter.buildRootFragment(root, properties);
         result.sanityCheck();
 
         return result;
     }
 
     private static class Fragmenter
-            extends PlanRewriter<FragmentProperties>
+            extends SimplePlanRewriter<FragmentProperties>
     {
+        private static final int ROOT_FRAGMENT_ID = 0;
+
         private final Map<Symbol, Type> types;
-        private int nextFragmentId;
+        private int nextFragmentId = ROOT_FRAGMENT_ID + 1;
 
         public Fragmenter(Map<Symbol, Type> types)
         {
             this.types = types;
+        }
+
+        public SubPlan buildRootFragment(PlanNode root, FragmentProperties properties)
+        {
+            return buildFragment(root, properties, new PlanFragmentId(String.valueOf(ROOT_FRAGMENT_ID)));
         }
 
         private PlanFragmentId nextFragmentId()
@@ -74,20 +81,18 @@ public class PlanFragmenter
             return new PlanFragmentId(String.valueOf(nextFragmentId++));
         }
 
-        private SubPlan buildFragment(PlanNode root, FragmentProperties properties)
+        private SubPlan buildFragment(PlanNode root, FragmentProperties properties, PlanFragmentId fragmentId)
         {
             Set<Symbol> dependencies = SymbolExtractor.extract(root);
 
             PlanFragment fragment = new PlanFragment(
-                    nextFragmentId(),
+                    fragmentId,
                     root,
                     Maps.filterKeys(types, in(dependencies)),
                     properties.getOutputLayout(),
                     properties.getDistribution(),
                     properties.getDistributeBy(),
-                    properties.getOutputPartitioning(),
-                    properties.getPartitionBy(),
-                    properties.getHash());
+                    properties.getPartitionFunction());
 
             return new SubPlan(fragment, properties.getChildren());
         }
@@ -104,7 +109,14 @@ public class PlanFragmenter
         }
 
         @Override
-        public PlanNode visitTableCommit(TableCommitNode node, RewriteContext<FragmentProperties> context)
+        public PlanNode visitTableFinish(TableFinishNode node, RewriteContext<FragmentProperties> context)
+        {
+            context.get().setCoordinatorOnlyDistribution();
+            return context.defaultRewrite(node, context.get());
+        }
+
+        @Override
+        public PlanNode visitMetadataDelete(MetadataDeleteNode node, RewriteContext<FragmentProperties> context)
         {
             context.get().setCoordinatorOnlyDistribution();
             return context.defaultRewrite(node, context.get());
@@ -143,7 +155,7 @@ public class PlanFragmenter
                 context.get().setFixedDistribution();
 
                 FragmentProperties childProperties = new FragmentProperties()
-                        .setHashPartitionedOutput(exchange.getPartitionKeys(), exchange.getHashSymbol())
+                        .setPartitionedOutput(exchange.getPartitionFunction().get())
                         .setOutputLayout(Iterables.getOnlyElement(exchange.getInputs()));
 
                 builder.add(buildSubPlan(Iterables.getOnlyElement(exchange.getSources()), childProperties, context));
@@ -169,8 +181,9 @@ public class PlanFragmenter
 
         private SubPlan buildSubPlan(PlanNode node, FragmentProperties properties, RewriteContext<FragmentProperties> context)
         {
+            PlanFragmentId planFragmentId = nextFragmentId();
             PlanNode child = context.rewrite(node, properties);
-            return buildFragment(child, properties);
+            return buildFragment(child, properties, planFragmentId);
         }
     }
 
@@ -179,10 +192,7 @@ public class PlanFragmenter
         private final List<SubPlan> children = new ArrayList<>();
 
         private Optional<List<Symbol>> outputLayout = Optional.empty();
-        private Optional<OutputPartitioning> outputPartitioning = Optional.empty();
-
-        private List<Symbol> partitionBy = ImmutableList.of();
-        private Optional<Symbol> hash = Optional.empty();
+        private Optional<PartitionFunctionBinding> partitionFunction = Optional.empty();
 
         private Optional<PlanDistribution> distribution = Optional.empty();
         private PlanNodeId distributeBy;
@@ -250,11 +260,11 @@ public class PlanFragmenter
 
         public FragmentProperties setUnpartitionedOutput()
         {
-            outputPartitioning.ifPresent(current -> {
-                throw new IllegalStateException(String.format("Output overwrite partitioning with %s (currently set to %s)", OutputPartitioning.NONE, current));
+            partitionFunction.ifPresent(current -> {
+                throw new IllegalStateException(String.format("Output overwrite partitioning with unpartitioned (currently set to %s)", current));
             });
 
-            outputPartitioning = Optional.of(OutputPartitioning.NONE);
+            partitionFunction = Optional.empty();
 
             return this;
         }
@@ -270,15 +280,13 @@ public class PlanFragmenter
             return this;
         }
 
-        public FragmentProperties setHashPartitionedOutput(List<Symbol> partitionKeys, Optional<Symbol> hash)
+        public FragmentProperties setPartitionedOutput(PartitionFunctionBinding partitionFunction)
         {
-            outputPartitioning.ifPresent(current -> {
-                throw new IllegalStateException(String.format("Cannot overwrite output partitioning with %s (currently set to %s)", OutputPartitioning.HASH, current));
-            });
+            if (this.partitionFunction.isPresent()) {
+                throw new IllegalStateException(String.format("Cannot overwrite output partitioning with %s (currently set to %s)", partitionFunction, this.partitionFunction));
+            }
 
-            this.outputPartitioning = Optional.of(OutputPartitioning.HASH);
-            this.partitionBy = ImmutableList.copyOf(partitionKeys);
-            this.hash = hash;
+            this.partitionFunction = Optional.of(partitionFunction);
 
             return this;
         }
@@ -295,24 +303,14 @@ public class PlanFragmenter
             return outputLayout.get();
         }
 
-        public OutputPartitioning getOutputPartitioning()
+        public Optional<PartitionFunctionBinding> getPartitionFunction()
         {
-            return outputPartitioning.get();
+            return partitionFunction;
         }
 
         public PlanDistribution getDistribution()
         {
             return distribution.get();
-        }
-
-        public List<Symbol> getPartitionBy()
-        {
-            return partitionBy;
-        }
-
-        public Optional<Symbol> getHash()
-        {
-            return hash;
         }
 
         public PlanNodeId getDistributeBy()

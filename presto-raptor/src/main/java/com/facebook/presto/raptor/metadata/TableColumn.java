@@ -29,23 +29,20 @@ import java.util.Objects;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class TableColumn
 {
     private final SchemaTableName table;
     private final String columnName;
-    private final int ordinalPosition;
     private final Type dataType;
     private final long columnId;
 
-    public TableColumn(SchemaTableName table, String columnName, int ordinalPosition, Type dataType, long columnId)
+    public TableColumn(SchemaTableName table, String columnName, Type dataType, long columnId)
     {
-        this.table = checkNotNull(table, "table is null");
-        this.columnName = checkNotNull(columnName, "columnName is null");
-        checkArgument(ordinalPosition >= 0, "ordinal position is negative");
-        this.ordinalPosition = ordinalPosition;
-        this.dataType = checkNotNull(dataType, "dataType is null");
+        this.table = requireNonNull(table, "table is null");
+        this.columnName = requireNonNull(columnName, "columnName is null");
+        this.dataType = requireNonNull(dataType, "dataType is null");
         this.columnId = columnId;
     }
 
@@ -57,11 +54,6 @@ public class TableColumn
     public String getColumnName()
     {
         return columnName;
-    }
-
-    public int getOrdinalPosition()
-    {
-        return ordinalPosition;
     }
 
     public Type getDataType()
@@ -77,7 +69,7 @@ public class TableColumn
     @Override
     public int hashCode()
     {
-        return Objects.hash(table, columnName, ordinalPosition, dataType);
+        return Objects.hash(table, columnName, dataType);
     }
 
     @Override
@@ -92,7 +84,6 @@ public class TableColumn
         TableColumn o = (TableColumn) obj;
         return Objects.equals(table, o.table) &&
                 Objects.equals(columnName, o.columnName) &&
-                Objects.equals(ordinalPosition, o.ordinalPosition) &&
                 Objects.equals(dataType, o.dataType);
     }
 
@@ -102,14 +93,18 @@ public class TableColumn
         return toStringHelper(this)
                 .add("table", table)
                 .add("columnName", columnName)
-                .add("ordinalPosition", ordinalPosition)
                 .add("dataType", dataType)
                 .toString();
     }
 
     public ColumnMetadata toColumnMetadata()
     {
-        return new ColumnMetadata(columnName, dataType, ordinalPosition, false);
+        return new ColumnMetadata(columnName, dataType, false);
+    }
+
+    public ColumnInfo toColumnInfo()
+    {
+        return new ColumnInfo(columnId, dataType);
     }
 
     public static class Mapper
@@ -120,7 +115,7 @@ public class TableColumn
         @Inject
         public Mapper(TypeManager typeManager)
         {
-            this.typeManager = checkNotNull(typeManager, "typeManager is null");
+            this.typeManager = requireNonNull(typeManager, "typeManager is null");
         }
 
         @Override
@@ -138,7 +133,6 @@ public class TableColumn
             return new TableColumn(
                     table,
                     r.getString("column_name"),
-                    r.getInt("ordinal_position"),
                     type,
                     r.getLong("column_id"));
         }

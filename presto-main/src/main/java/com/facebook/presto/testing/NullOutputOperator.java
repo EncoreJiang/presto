@@ -24,7 +24,7 @@ import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class NullOutputOperator
         implements Operator
@@ -68,6 +68,12 @@ public class NullOutputOperator
         public void close()
         {
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new NullOutputOperatorFactory(operatorId, types);
+        }
     }
 
     private final OperatorContext operatorContext;
@@ -76,8 +82,8 @@ public class NullOutputOperator
 
     public NullOutputOperator(OperatorContext operatorContext, List<Type> types)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
     }
 
     @Override

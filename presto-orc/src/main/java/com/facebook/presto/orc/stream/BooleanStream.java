@@ -14,11 +14,14 @@
 package com.facebook.presto.orc.stream;
 
 import com.facebook.presto.orc.checkpoint.BooleanStreamCheckpoint;
+import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.type.Type;
 
 import java.io.IOException;
 
 import static com.google.common.base.Preconditions.checkState;
 
+@SuppressWarnings("NarrowingCompoundAssignment")
 public class BooleanStream
         implements ValueStream<BooleanStreamCheckpoint>
 {
@@ -74,7 +77,7 @@ public class BooleanStream
     }
 
     @Override
-    public void skip(int items)
+    public void skip(long items)
             throws IOException
     {
         if (bitsInData >= items) {
@@ -86,7 +89,7 @@ public class BooleanStream
             bitsInData = 0;
 
             byteStream.skip(items >>> 3);
-            items = items & 0b111;
+            items &= 0b111;
 
             if (items != 0) {
                 readByte();
@@ -170,6 +173,53 @@ public class BooleanStream
 
                 // read bit
                 vector[i] = (data & HIGH_BIT_MASK) != 0;
+
+                // mark bit consumed
+                data <<= 1;
+                bitsInData--;
+            }
+        }
+    }
+
+    /**
+     * Sets the vector element to true if the bit is set.
+     */
+    public void getSetBits(Type type, int batchSize, BlockBuilder builder)
+            throws IOException
+    {
+        for (int i = 0; i < batchSize; i++) {
+            // read more data if necessary
+            if (bitsInData == 0) {
+                readByte();
+            }
+
+            // read bit
+            type.writeBoolean(builder, (data & HIGH_BIT_MASK) != 0);
+
+            // mark bit consumed
+            data <<= 1;
+            bitsInData--;
+        }
+    }
+
+    /**
+     * Sets the vector element to true if the bit is set, skipping the null values.
+     */
+    public void getSetBits(Type type, int batchSize, BlockBuilder builder, boolean[] isNull)
+            throws IOException
+    {
+        for (int i = 0; i < batchSize; i++) {
+            if (isNull[i]) {
+                builder.appendNull();
+            }
+            else {
+                // read more data if necessary
+                if (bitsInData == 0) {
+                    readByte();
+                }
+
+                // read bit
+                type.writeBoolean(builder, (data & HIGH_BIT_MASK) != 0);
 
                 // mark bit consumed
                 data <<= 1;

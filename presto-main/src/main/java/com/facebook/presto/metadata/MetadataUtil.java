@@ -18,6 +18,8 @@ import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.analyzer.SemanticException;
+import com.facebook.presto.sql.tree.Node;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -26,9 +28,13 @@ import com.google.common.collect.Lists;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.sql.analyzer.SemanticErrorCode.CATALOG_NOT_SPECIFIED;
+import static com.facebook.presto.sql.analyzer.SemanticErrorCode.SCHEMA_NOT_SPECIFIED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
 //import static java.util.Locale.ENGLISH;
+//import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public final class MetadataUtil
 {
@@ -73,7 +79,7 @@ public final class MetadataUtil
         return checkLowerCase(catalogName, "catalogName");
     }
 
-    public static void checkTableName(String catalogName, String schemaName, String tableName)
+    public static void checkObjectName(String catalogName, String schemaName, String objectName)
     {
         //checkLowerCase(catalogName, "catalogName");
         //checkLowerCase(schemaName, "schemaName");
@@ -105,18 +111,29 @@ public final class MetadataUtil
         return null;
     }
 
-    public static QualifiedTableName createQualifiedTableName(Session session, QualifiedName name)
+    public static QualifiedObjectName createQualifiedObjectName(Session session, Node node, QualifiedName name)
     {
-        checkNotNull(session, "session is null");
-        checkNotNull(name, "name is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(name, "name is null");
         checkArgument(name.getParts().size() <= 3, "Too many dots in table name: %s", name);
 
         List<String> parts = Lists.reverse(name.getParts());
-        String tableName = parts.get(0);
-        String schemaName = (parts.size() > 1) ? parts.get(1) : session.getSchema();
-        String catalogName = (parts.size() > 2) ? parts.get(2) : session.getCatalog();
+        String objectName = parts.get(0);
+        String schemaName = (parts.size() > 1) ? parts.get(1) : session.getSchema().orElseThrow(() ->
+                new SemanticException(CATALOG_NOT_SPECIFIED, node, "Catalog must be specified when session catalog is not set"));
+        String catalogName = (parts.size() > 2) ? parts.get(2) : session.getCatalog().orElseThrow(() ->
+                new SemanticException(SCHEMA_NOT_SPECIFIED, node, "Schema must be specified when session schema is not set"));
 
-        return new QualifiedTableName(catalogName, schemaName, tableName);
+        return new QualifiedObjectName(catalogName, schemaName, objectName);
+    }
+
+    public static boolean tableExists(Metadata metadata, Session session, String table)
+    {
+        if (!session.getCatalog().isPresent() || !session.getSchema().isPresent()) {
+            return false;
+        }
+        QualifiedObjectName name = new QualifiedObjectName(session.getCatalog().get(), session.getSchema().get(), table);
+        return metadata.getTableHandle(session, name).isPresent();
     }
 
     public static class SchemaMetadataBuilder
@@ -154,7 +171,7 @@ public final class MetadataUtil
 
         private final SchemaTableName tableName;
         private final ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
-        private int ordinalPosition;
+        private final ImmutableMap.Builder<String, Object> properties = ImmutableMap.builder();
 
         private TableMetadataBuilder(SchemaTableName tableName)
         {
@@ -163,21 +180,25 @@ public final class MetadataUtil
 
         public TableMetadataBuilder column(String columnName, Type type)
         {
-            columns.add(new ColumnMetadata(columnName, type, ordinalPosition, false));
-            ordinalPosition++;
+            columns.add(new ColumnMetadata(columnName, type, false));
             return this;
         }
 
         public TableMetadataBuilder partitionKeyColumn(String columnName, Type type)
         {
-            columns.add(new ColumnMetadata(columnName, type, ordinalPosition, true));
-            ordinalPosition++;
+            columns.add(new ColumnMetadata(columnName, type, true));
+            return this;
+        }
+
+        public TableMetadataBuilder property(String name, Object value)
+        {
+            properties.put(name, value);
             return this;
         }
 
         public ConnectorTableMetadata build()
         {
-            return new ConnectorTableMetadata(tableName, columns.build());
+            return new ConnectorTableMetadata(tableName, columns.build(), properties.build());
         }
     }
 }

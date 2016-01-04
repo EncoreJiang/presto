@@ -13,10 +13,12 @@
  */
 package com.facebook.presto.raptor;
 
+import com.facebook.presto.raptor.storage.ReaderAttributes;
 import com.facebook.presto.raptor.storage.StorageManager;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorPageSourceProvider;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.type.Type;
 
@@ -27,7 +29,7 @@ import java.util.UUID;
 import java.util.function.Function;
 
 import static com.facebook.presto.raptor.util.Types.checkType;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 
 public class RaptorPageSourceProvider
@@ -38,11 +40,11 @@ public class RaptorPageSourceProvider
     @Inject
     public RaptorPageSourceProvider(StorageManager storageManager)
     {
-        this.storageManager = checkNotNull(storageManager, "storageManager is null");
+        this.storageManager = requireNonNull(storageManager, "storageManager is null");
     }
 
     @Override
-    public ConnectorPageSource createPageSource(ConnectorSplit split, List<ColumnHandle> columns)
+    public ConnectorPageSource createPageSource(ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
     {
         RaptorSplit raptorSplit = checkType(split, RaptorSplit.class, "split");
 
@@ -51,7 +53,13 @@ public class RaptorPageSourceProvider
         List<Long> columnIds = columnHandles.stream().map(RaptorColumnHandle::getColumnId).collect(toList());
         List<Type> columnTypes = columnHandles.stream().map(RaptorColumnHandle::getColumnType).collect(toList());
 
-        return storageManager.getPageSource(shardUuid, columnIds, columnTypes, raptorSplit.getEffectivePredicate());
+        return storageManager.getPageSource(
+                shardUuid,
+                columnIds,
+                columnTypes,
+                raptorSplit.getEffectivePredicate(),
+                ReaderAttributes.from(session),
+                raptorSplit.getTransactionId());
     }
 
     private static Function<ColumnHandle, RaptorColumnHandle> toRaptorColumnHandle()

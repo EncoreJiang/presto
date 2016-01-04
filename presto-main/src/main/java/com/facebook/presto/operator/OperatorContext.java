@@ -15,8 +15,8 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.ExceededMemoryLimitException;
 import com.facebook.presto.Session;
+import com.facebook.presto.memory.AbstractAggregatedMemoryContext;
 import com.facebook.presto.spi.Page;
-import com.google.common.base.Supplier;
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -33,11 +33,15 @@ import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
+import static com.facebook.presto.ExceededMemoryLimitException.exceededLocalLimit;
 import static com.facebook.presto.operator.BlockedReason.WAITING_FOR_MEMORY;
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 @ThreadSafe
@@ -78,6 +82,7 @@ public class OperatorContext
     private final AtomicLong finishUserNanos = new AtomicLong();
 
     private final AtomicLong memoryReservation = new AtomicLong();
+    private final OperatorSystemMemoryContext systemMemoryContext;
     private final long maxMemoryReservation;
 
     private final AtomicReference<Supplier<Object>> infoSupplier = new AtomicReference<>();
@@ -88,9 +93,10 @@ public class OperatorContext
         checkArgument(operatorId >= 0, "operatorId is negative");
         this.operatorId = operatorId;
         this.maxMemoryReservation = maxMemoryReservation;
-        this.operatorType = checkNotNull(operatorType, "operatorType is null");
-        this.driverContext = checkNotNull(driverContext, "driverContext is null");
-        this.executor = checkNotNull(executor, "executor is null");
+        this.operatorType = requireNonNull(operatorType, "operatorType is null");
+        this.driverContext = requireNonNull(driverContext, "driverContext is null");
+        this.systemMemoryContext = new OperatorSystemMemoryContext(this.driverContext);
+        this.executor = requireNonNull(executor, "executor is null");
         SettableFuture<Object> future = SettableFuture.create();
         future.set(null);
         this.memoryFuture.set(future);
@@ -181,7 +187,7 @@ public class OperatorContext
 
     public void recordBlocked(ListenableFuture<?> blocked)
     {
-        checkNotNull(blocked, "blocked is null");
+        requireNonNull(blocked, "blocked is null");
 
         BlockedMonitor monitor = new BlockedMonitor();
 
@@ -205,11 +211,6 @@ public class OperatorContext
     public ListenableFuture<?> isWaitingForMemory()
     {
         return memoryFuture.get();
-    }
-
-    public DataSize getMaxMemorySize()
-    {
-        return driverContext.getMaxMemorySize();
     }
 
     public DataSize getOperatorPreAllocatedMemory()
@@ -250,10 +251,10 @@ public class OperatorContext
                 }
             });
         }
-        long newReservation = memoryReservation.getAndAdd(bytes);
+        long newReservation = memoryReservation.addAndGet(bytes);
         if (newReservation > maxMemoryReservation) {
             memoryReservation.getAndAdd(-bytes);
-            throw new ExceededMemoryLimitException(getMaxMemorySize());
+            throw exceededLocalLimit(new DataSize(maxMemoryReservation, BYTE));
         }
     }
 
@@ -263,9 +264,10 @@ public class OperatorContext
             return false;
         }
 
-        long newReservation = memoryReservation.getAndAdd(bytes);
+        long newReservation = memoryReservation.addAndGet(bytes);
         if (newReservation > maxMemoryReservation) {
             memoryReservation.getAndAdd(-bytes);
+            driverContext.freeMemory(bytes);
             return false;
         }
         return true;
@@ -279,9 +281,39 @@ public class OperatorContext
         memoryReservation.getAndAdd(-bytes);
     }
 
+    public AbstractAggregatedMemoryContext getSystemMemoryContext()
+    {
+        return systemMemoryContext;
+    }
+
+    public void closeSystemMemoryContext()
+    {
+        systemMemoryContext.close();
+    }
+
     public void moreMemoryAvailable()
     {
         memoryFuture.get().set(null);
+    }
+
+    public void transferMemoryToTaskContext(long taskBytes)
+    {
+        long bytes = memoryReservation.getAndSet(0);
+        driverContext.transferMemoryToTaskContext(bytes);
+
+        TaskContext taskContext = driverContext.getPipelineContext().getTaskContext();
+        if (taskBytes > bytes) {
+            try {
+                taskContext.reserveMemory(taskBytes - bytes);
+            }
+            catch (ExceededMemoryLimitException e) {
+                taskContext.freeMemory(bytes);
+                throw e;
+            }
+        }
+        else {
+            taskContext.freeMemory(bytes - taskBytes);
+        }
     }
 
     public void setMemoryReservation(long newMemoryReservation)
@@ -315,7 +347,7 @@ public class OperatorContext
 
     public void setInfoSupplier(Supplier<Object> infoSupplier)
     {
-        checkNotNull(infoSupplier, "infoProvider is null");
+        requireNonNull(infoSupplier, "infoProvider is null");
         this.infoSupplier.set(infoSupplier);
     }
 
@@ -373,6 +405,7 @@ public class OperatorContext
                 new Duration(finishUserNanos.get(), NANOSECONDS).convertToMostSuccinctTimeUnit(),
 
                 new DataSize(memoryReservation.get(), BYTE).convertToMostSuccinctDataSize(),
+                new DataSize(systemMemoryContext.getReservedBytes(), BYTE).convertToMostSuccinctDataSize(),
                 memoryFuture.get().isDone() ? Optional.empty() : Optional.of(WAITING_FOR_MEMORY),
                 info);
     }
@@ -420,6 +453,60 @@ public class OperatorContext
         public long getBlockedTime()
         {
             return nanosBetween(start, System.nanoTime());
+        }
+    }
+
+    private static class OperatorSystemMemoryContext
+            extends AbstractAggregatedMemoryContext
+    {
+        // TODO: remove this class. See comment in AbstractAggregatedMemoryContext
+
+        private final DriverContext driverContext;
+
+        private boolean closed;
+        private long reservedBytes;
+
+        public OperatorSystemMemoryContext(DriverContext driverContext)
+        {
+            this.driverContext = driverContext;
+        }
+
+        public void close()
+        {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            driverContext.freeSystemMemory(reservedBytes);
+            reservedBytes = 0;
+        }
+
+        @Override
+        protected void updateBytes(long bytes)
+        {
+            checkState(!closed);
+            if (bytes > 0) {
+                driverContext.reserveSystemMemory(bytes);
+            }
+            else {
+                checkArgument(reservedBytes + bytes >= 0, "tried to free %s bytes of memory from %s bytes reserved", -bytes, reservedBytes);
+                driverContext.freeSystemMemory(-bytes);
+            }
+            reservedBytes += bytes;
+        }
+
+        public long getReservedBytes()
+        {
+            return reservedBytes;
+        }
+
+        @Override
+        public String toString()
+        {
+            return toStringHelper(this)
+                    .add("usedBytes", reservedBytes)
+                    .add("closed", closed)
+                    .toString();
         }
     }
 }

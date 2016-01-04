@@ -31,10 +31,15 @@ public class TestFeaturesConfig
         assertRecordedDefaults(ConfigAssertions.recordDefaults(FeaturesConfig.class)
                 .setExperimentalSyntaxEnabled(false)
                 .setDistributedIndexJoinsEnabled(false)
-                .setDistributedJoinsEnabled(false)
+                .setDistributedJoinsEnabled(true)
+                .setRedistributeWrites(true)
                 .setOptimizeMetadataQueries(false)
-                .setOptimizeHashGeneration(false)
-                .setOptimizeSingleDistinct(true));
+                .setOptimizeHashGeneration(true)
+                .setOptimizeSingleDistinct(true)
+                .setPushTableWriteThroughUnion(true)
+                .setIntermediateAggregationsEnabled(false)
+                .setColumnarProcessing(false)
+                .setColumnarProcessingDictionary(false));
     }
 
     @Test
@@ -43,27 +48,42 @@ public class TestFeaturesConfig
         Map<String, String> propertiesLegacy = new ImmutableMap.Builder<String, String>()
                 .put("analyzer.experimental-syntax-enabled", "true")
                 .put("distributed-index-joins-enabled", "true")
-                .put("distributed-joins-enabled", "true")
+                .put("distributed-joins-enabled", "false")
+                .put("redistribute-writes", "false")
                 .put("optimizer.optimize-metadata-queries", "true")
-                .put("optimizer.optimize-hash-generation", "true")
+                .put("optimizer.optimize-hash-generation", "false")
                 .put("optimizer.optimize-single-distinct", "false")
+                .put("optimizer.push-table-write-through-union", "false")
+                .put("optimizer.use-intermediate-aggregations", "true")
+                .put("optimizer.columnar-processing", "true")
+                .put("optimizer.columnar-processing-dictionary", "true")
                 .build();
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
                 .put("experimental-syntax-enabled", "true")
                 .put("distributed-index-joins-enabled", "true")
-                .put("distributed-joins-enabled", "true")
+                .put("distributed-joins-enabled", "false")
+                .put("redistribute-writes", "false")
                 .put("optimizer.optimize-metadata-queries", "true")
-                .put("optimizer.optimize-hash-generation", "true")
+                .put("optimizer.optimize-hash-generation", "false")
                 .put("optimizer.optimize-single-distinct", "false")
+                .put("optimizer.push-table-write-through-union", "false")
+                .put("optimizer.use-intermediate-aggregations", "true")
+                .put("optimizer.columnar-processing", "true")
+                .put("optimizer.columnar-processing-dictionary", "true")
                 .build();
 
         FeaturesConfig expected = new FeaturesConfig()
                 .setExperimentalSyntaxEnabled(true)
                 .setDistributedIndexJoinsEnabled(true)
-                .setDistributedJoinsEnabled(true)
+                .setDistributedJoinsEnabled(false)
+                .setRedistributeWrites(false)
                 .setOptimizeMetadataQueries(true)
-                .setOptimizeHashGeneration(true)
-                .setOptimizeSingleDistinct(false);
+                .setOptimizeHashGeneration(false)
+                .setOptimizeSingleDistinct(false)
+                .setPushTableWriteThroughUnion(false)
+                .setIntermediateAggregationsEnabled(true)
+                .setColumnarProcessing(true)
+                .setColumnarProcessingDictionary(true);
 
         assertFullMapping(properties, expected);
         assertDeprecatedEquivalence(FeaturesConfig.class, properties, propertiesLegacy);

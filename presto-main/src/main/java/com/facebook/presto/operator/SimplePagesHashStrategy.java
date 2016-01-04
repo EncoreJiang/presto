@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
@@ -24,7 +25,7 @@ import java.util.Optional;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class SimplePagesHashStrategy
         implements PagesHashStrategy
@@ -36,10 +37,10 @@ public class SimplePagesHashStrategy
 
     public SimplePagesHashStrategy(List<Type> types, List<List<Block>> channels, List<Integer> hashChannels, Optional<Integer> precomputedHashChannel)
     {
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
-        this.channels = ImmutableList.copyOf(checkNotNull(channels, "channels is null"));
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+        this.channels = ImmutableList.copyOf(requireNonNull(channels, "channels is null"));
         checkArgument(types.size() == channels.size(), "Expected types and channels to be the same length");
-        this.hashChannels = ImmutableList.copyOf(checkNotNull(hashChannels, "hashChannels is null"));
+        this.hashChannels = ImmutableList.copyOf(requireNonNull(hashChannels, "hashChannels is null"));
         if (precomputedHashChannel.isPresent()) {
             this.precomputedHashChannel = channels.get(precomputedHashChannel.get());
         }
@@ -52,6 +53,15 @@ public class SimplePagesHashStrategy
     public int getChannelCount()
     {
         return channels.size();
+    }
+
+    @Override
+    public long getSizeInBytes()
+    {
+        return channels.stream()
+                .flatMap(List::stream)
+                .mapToLong(Block::getRetainedSizeInBytes)
+                .sum();
     }
 
     @Override
@@ -117,6 +127,21 @@ public class SimplePagesHashStrategy
             Type type = types.get(hashChannel);
             Block leftBlock = channels.get(hashChannel).get(leftBlockIndex);
             Block rightBlock = rightBlocks[i];
+            if (!TypeUtils.positionEqualsPosition(type, leftBlock, leftPosition, rightBlock, rightPosition)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public boolean positionEqualsRow(int leftBlockIndex, int leftPosition, int rightPosition, Page page, int[] rightChannels)
+    {
+        for (int i = 0; i < hashChannels.size(); i++) {
+            int hashChannel = hashChannels.get(i);
+            Type type = types.get(hashChannel);
+            Block leftBlock = channels.get(hashChannel).get(leftBlockIndex);
+            Block rightBlock = page.getBlock(rightChannels[i]);
             if (!TypeUtils.positionEqualsPosition(type, leftBlock, leftPosition, rightBlock, rightPosition)) {
                 return false;
             }

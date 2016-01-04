@@ -30,11 +30,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class PlanFragment
@@ -47,12 +48,6 @@ public class PlanFragment
         COORDINATOR_ONLY
     }
 
-    public enum OutputPartitioning
-    {
-        NONE,
-        HASH
-    }
-
     private final PlanFragmentId id;
     private final PlanNode root;
     private final Map<Symbol, Type> symbols;
@@ -62,9 +57,7 @@ public class PlanFragment
     private final List<Type> types;
     private final PlanNode partitionedSourceNode;
     private final List<RemoteSourceNode> remoteSourceNodes;
-    private final OutputPartitioning outputPartitioning;
-    private final List<Symbol> partitionBy;
-    private final Optional<Symbol> hash;
+    private final Optional<PartitionFunctionBinding> partitionFunction;
 
     @JsonCreator
     public PlanFragment(
@@ -74,18 +67,14 @@ public class PlanFragment
             @JsonProperty("outputLayout") List<Symbol> outputLayout,
             @JsonProperty("distribution") PlanDistribution distribution,
             @JsonProperty("partitionedSource") PlanNodeId partitionedSource,
-            @JsonProperty("outputPartitioning") OutputPartitioning outputPartitioning,
-            @JsonProperty("partitionBy") List<Symbol> partitionBy,
-            @JsonProperty("hash") Optional<Symbol> hash)
+            @JsonProperty("partitionFunction") Optional<PartitionFunctionBinding> partitionFunction)
     {
-        this.id = checkNotNull(id, "id is null");
-        this.root = checkNotNull(root, "root is null");
-        this.symbols = checkNotNull(symbols, "symbols is null");
-        this.outputLayout = checkNotNull(outputLayout, "outputLayout is null");
-        this.distribution = checkNotNull(distribution, "distribution is null");
+        this.id = requireNonNull(id, "id is null");
+        this.root = requireNonNull(root, "root is null");
+        this.symbols = requireNonNull(symbols, "symbols is null");
+        this.outputLayout = requireNonNull(outputLayout, "outputLayout is null");
+        this.distribution = requireNonNull(distribution, "distribution is null");
         this.partitionedSource = partitionedSource;
-        this.partitionBy = ImmutableList.copyOf(checkNotNull(partitionBy, "partitionBy is null"));
-        this.hash = hash;
 
         checkArgument(ImmutableSet.copyOf(root.getOutputSymbols()).containsAll(outputLayout),
                 "Root node outputs (%s) don't include all fragment outputs (%s)", root.getOutputSymbols(), outputLayout);
@@ -100,7 +89,7 @@ public class PlanFragment
         findRemoteSourceNodes(root, remoteSourceNodes);
         this.remoteSourceNodes = remoteSourceNodes.build();
 
-        this.outputPartitioning = checkNotNull(outputPartitioning, "outputPartitioning is null");
+        this.partitionFunction = requireNonNull(partitionFunction, "partitionFunction is null");
     }
 
     @JsonProperty
@@ -140,21 +129,9 @@ public class PlanFragment
     }
 
     @JsonProperty
-    public OutputPartitioning getOutputPartitioning()
+    public Optional<PartitionFunctionBinding> getPartitionFunction()
     {
-        return outputPartitioning;
-    }
-
-    @JsonProperty
-    public List<Symbol> getPartitionBy()
-    {
-        return partitionBy;
-    }
-
-    @JsonProperty
-    public Optional<Symbol> getHash()
-    {
-        return hash;
+        return partitionFunction;
     }
 
     public List<Type> getTypes()
@@ -165,6 +142,11 @@ public class PlanFragment
     public PlanNode getPartitionedSourceNode()
     {
         return partitionedSourceNode;
+    }
+
+    public boolean isLeaf()
+    {
+        return remoteSourceNodes.isEmpty();
     }
 
     public List<RemoteSourceNode> getRemoteSourceNodes()
@@ -196,6 +178,11 @@ public class PlanFragment
         }
     }
 
+    public PlanFragment withPartitionCount(OptionalInt partitionCount)
+    {
+        return new PlanFragment(id, root, symbols, outputLayout, distribution, partitionedSource, partitionFunction.map(function -> function.withPartitionCount(partitionCount)));
+    }
+
     @Override
     public String toString()
     {
@@ -203,8 +190,7 @@ public class PlanFragment
                 .add("id", id)
                 .add("distribution", distribution)
                 .add("partitionedSource", partitionedSource)
-                .add("outputPartitioning", outputPartitioning)
-                .add("hash", hash)
+                .add("partitionFunction", partitionFunction)
                 .toString();
     }
 }

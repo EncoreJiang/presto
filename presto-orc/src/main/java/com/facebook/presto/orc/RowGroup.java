@@ -16,24 +16,31 @@ package com.facebook.presto.orc;
 import com.facebook.presto.orc.stream.StreamSources;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class RowGroup
 {
     private final int groupId;
+    private final long rowOffset;
     private final long rowCount;
     private final StreamSources streamSources;
 
-    public RowGroup(int groupId, long rowCount, StreamSources streamSources)
+    public RowGroup(int groupId, long rowOffset, long rowCount, StreamSources streamSources)
     {
         this.groupId = groupId;
+        this.rowOffset = rowOffset;
         this.rowCount = rowCount;
-        this.streamSources = checkNotNull(streamSources, "streamSources is null");
+        this.streamSources = requireNonNull(streamSources, "streamSources is null");
     }
 
     public int getGroupId()
     {
         return groupId;
+    }
+
+    public long getRowOffset()
+    {
+        return rowOffset;
     }
 
     public long getRowCount()
@@ -51,6 +58,7 @@ public class RowGroup
     {
         return toStringHelper(this)
                 .add("groupId", groupId)
+                .add("rowOffset", rowOffset)
                 .add("rowCount", rowCount)
                 .add("streamSources", streamSources)
                 .toString();

@@ -13,19 +13,15 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
-import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 import java.util.Collections;
@@ -34,25 +30,20 @@ import java.util.List;
 import java.util.Map;
 
 import static com.facebook.presto.metadata.Signature.orderableTypeParameter;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 
 public final class ArraySortFunction
-        extends ParametricScalar
+        extends SqlScalarFunction
 {
     public static final ArraySortFunction ARRAY_SORT_FUNCTION = new ArraySortFunction();
     private static final String FUNCTION_NAME = "array_sort";
-    private static final Signature SIGNATURE = new Signature(FUNCTION_NAME, ImmutableList.of(orderableTypeParameter("E")), "array<E>", ImmutableList.of("array<E>"), false, false);
-    private static final MethodHandle METHOD_HANDLE = methodHandle(ArraySortFunction.class, "sort", Type.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(ArraySortFunction.class, "sort", Type.class, Block.class);
 
-    @Override
-    public Signature getSignature()
+    public ArraySortFunction()
     {
-        return SIGNATURE;
+        super(FUNCTION_NAME, ImmutableList.of(orderableTypeParameter("E")), "array<E>", ImmutableList.of("array<E>"));
     }
 
     @Override
@@ -74,21 +65,16 @@ public final class ArraySortFunction
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         checkArgument(types.size() == 1, format("%s expects only one argument", FUNCTION_NAME));
         Type type = types.get("E");
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(type);
-        Signature signature = new Signature(FUNCTION_NAME,
-                parameterizedTypeName("array", type.getTypeSignature()),
-                parameterizedTypeName("array", type.getTypeSignature()));
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), false, ImmutableList.of(false));
+        return new ScalarFunctionImplementation(false, ImmutableList.of(false), methodHandle, isDeterministic());
     }
 
-    public static Slice sort(Type type, Slice encodedArray)
+    public static Block sort(Type type, Block block)
     {
-        Block block = readStructuralBlock(encodedArray);
-
         List<Integer> positions = Ints.asList(new int[block.getPositionCount()]);
         for (int i = 0; i < block.getPositionCount(); i++) {
             positions.set(i, i);
@@ -104,12 +90,12 @@ public final class ArraySortFunction
             }
         });
 
-        BlockBuilder blockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), block.getSizeInBytes());
+        BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), block.getPositionCount());
 
         for (int position : positions) {
             type.appendTo(block, position, blockBuilder);
         }
 
-        return buildStructuralSlice(blockBuilder);
+        return blockBuilder.build();
     }
 }

@@ -22,10 +22,10 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.StandardTypes;
+import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.relational.RowExpression;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
 import io.airlift.tpch.LineItem;
 import io.airlift.tpch.LineItemGenerator;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -43,8 +43,10 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.VerboseMode;
 
 import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
@@ -54,7 +56,7 @@ import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.field;
 import static com.google.common.base.Preconditions.checkState;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static io.airlift.slice.Slices.utf8Slice;
 
 @State(Scope.Thread)
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -68,8 +70,8 @@ public class BenchmarkPageProcessor
     private static final int SHIP_DATE = 2;
     private static final int QUANTITY = 3;
 
-    private static final Slice MIN_SHIP_DATE = Slices.copiedBuffer("1994-01-01", UTF_8);
-    private static final Slice MAX_SHIP_DATE = Slices.copiedBuffer("1995-01-01", UTF_8);
+    private static final Slice MIN_SHIP_DATE = utf8Slice("1994-01-01");
+    private static final Slice MAX_SHIP_DATE = utf8Slice("1995-01-01");
 
     private Page inputPage;
     private PageProcessor handCodedProcessor;
@@ -155,6 +157,18 @@ public class BenchmarkPageProcessor
             return position;
         }
 
+        @Override
+        public Page processColumnar(ConnectorSession session, Page page, List<? extends Type> types)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Page processColumnarDictionary(ConnectorSession session, Page page, List<? extends Type> types)
+        {
+            throw new UnsupportedOperationException();
+        }
+
         private static void project(int position, PageBuilder pageBuilder, Block extendedPriceBlock, Block discountBlock)
         {
             pageBuilder.declarePosition();
@@ -181,37 +195,37 @@ public class BenchmarkPageProcessor
     //    and discount >= 0.05
     //    and discount <= 0.07
     //    and quantity < 24;
-    private static final RowExpression FILTER = call(new Signature("AND", StandardTypes.BOOLEAN),
+    private static final RowExpression FILTER = call(new Signature("AND", SCALAR, StandardTypes.BOOLEAN),
             BOOLEAN,
-            call(new Signature(OperatorType.GREATER_THAN_OR_EQUAL.name(), StandardTypes.BOOLEAN, StandardTypes.VARCHAR, StandardTypes.VARCHAR),
+            call(new Signature(OperatorType.GREATER_THAN_OR_EQUAL.name(), SCALAR, StandardTypes.BOOLEAN, StandardTypes.VARCHAR, StandardTypes.VARCHAR),
                     BOOLEAN,
                     field(SHIP_DATE, VARCHAR),
                     constant(MIN_SHIP_DATE, VARCHAR)),
-            call(new Signature("AND", StandardTypes.BOOLEAN),
+            call(new Signature("AND", SCALAR, StandardTypes.BOOLEAN),
                     BOOLEAN,
-                    call(new Signature(OperatorType.LESS_THAN.name(), StandardTypes.BOOLEAN, StandardTypes.VARCHAR, StandardTypes.VARCHAR),
+                    call(new Signature(OperatorType.LESS_THAN.name(), SCALAR, StandardTypes.BOOLEAN, StandardTypes.VARCHAR, StandardTypes.VARCHAR),
                             BOOLEAN,
                             field(SHIP_DATE, VARCHAR),
                             constant(MAX_SHIP_DATE, VARCHAR)),
-                    call(new Signature("AND", StandardTypes.BOOLEAN),
+                    call(new Signature("AND", SCALAR, StandardTypes.BOOLEAN),
                             BOOLEAN,
-                            call(new Signature(OperatorType.GREATER_THAN_OR_EQUAL.name(), StandardTypes.BOOLEAN, StandardTypes.DOUBLE, StandardTypes.DOUBLE),
+                            call(new Signature(OperatorType.GREATER_THAN_OR_EQUAL.name(), SCALAR, StandardTypes.BOOLEAN, StandardTypes.DOUBLE, StandardTypes.DOUBLE),
                                     BOOLEAN,
                                     field(DISCOUNT, DOUBLE),
                                     constant(0.05, DOUBLE)),
-                            call(new Signature("AND", StandardTypes.BOOLEAN),
+                            call(new Signature("AND", SCALAR, StandardTypes.BOOLEAN),
                                     BOOLEAN,
-                                    call(new Signature(OperatorType.LESS_THAN_OR_EQUAL.name(), StandardTypes.BOOLEAN, StandardTypes.DOUBLE, StandardTypes.DOUBLE),
+                                    call(new Signature(OperatorType.LESS_THAN_OR_EQUAL.name(), SCALAR, StandardTypes.BOOLEAN, StandardTypes.DOUBLE, StandardTypes.DOUBLE),
                                             BOOLEAN,
                                             field(DISCOUNT, DOUBLE),
                                             constant(0.07, DOUBLE)),
-                                    call(new Signature(OperatorType.LESS_THAN.name(), StandardTypes.BOOLEAN, StandardTypes.BIGINT, StandardTypes.BIGINT),
+                                    call(new Signature(OperatorType.LESS_THAN.name(), SCALAR, StandardTypes.BOOLEAN, StandardTypes.BIGINT, StandardTypes.BIGINT),
                                             BOOLEAN,
                                             field(QUANTITY, BIGINT),
                                             constant((long) 24, BIGINT))))));
 
     private static final RowExpression PROJECT = call(
-            new Signature(OperatorType.MULTIPLY.name(), StandardTypes.DOUBLE, StandardTypes.DOUBLE, StandardTypes.DOUBLE),
+            new Signature(OperatorType.MULTIPLY.name(), SCALAR, StandardTypes.DOUBLE, StandardTypes.DOUBLE, StandardTypes.DOUBLE),
             DOUBLE,
             field(EXTENDED_PRICE, DOUBLE),
             field(DISCOUNT, DOUBLE));

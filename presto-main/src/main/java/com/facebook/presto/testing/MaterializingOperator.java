@@ -23,8 +23,8 @@ import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class MaterializingOperator
         implements Operator
@@ -61,6 +61,12 @@ public class MaterializingOperator
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new MaterializingOperatorFactory(operatorId, sourceTypes);
+        }
     }
 
     private final OperatorContext operatorContext;
@@ -70,8 +76,14 @@ public class MaterializingOperator
 
     public MaterializingOperator(OperatorContext operatorContext, List<Type> sourceTypes)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         resultBuilder = MaterializedResult.resultBuilder(operatorContext.getSession(), sourceTypes);
+    }
+
+    public MaterializingOperator(OperatorContext operatorContext, MaterializedResult.Builder resultBuilder)
+    {
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.resultBuilder = requireNonNull(resultBuilder, "resultBuilder is null");
     }
 
     public boolean isClosed()
@@ -117,7 +129,7 @@ public class MaterializingOperator
     @Override
     public void addInput(Page page)
     {
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
         checkState(!finished, "operator finished");
 
         resultBuilder.page(page);

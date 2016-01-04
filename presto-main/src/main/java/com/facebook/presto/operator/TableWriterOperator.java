@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.operator;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.spi.ConnectorPageSink;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
@@ -33,8 +34,8 @@ import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.CreateHandle;
 import static com.facebook.presto.sql.planner.plan.TableWriterNode.InsertHandle;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class TableWriterOperator
         implements Operator
@@ -49,16 +50,23 @@ public class TableWriterOperator
         private final WriterTarget target;
         private final List<Integer> inputChannels;
         private final Optional<Integer> sampleWeightChannel;
+        private final Session session;
         private boolean closed;
 
-        public TableWriterOperatorFactory(int operatorId, PageSinkManager pageSinkManager, WriterTarget writerTarget, List<Integer> inputChannels, Optional<Integer> sampleWeightChannel)
+        public TableWriterOperatorFactory(int operatorId,
+                PageSinkManager pageSinkManager,
+                WriterTarget writerTarget,
+                List<Integer> inputChannels,
+                Optional<Integer> sampleWeightChannel,
+                Session session)
         {
             this.operatorId = operatorId;
-            this.inputChannels = checkNotNull(inputChannels, "inputChannels is null");
-            this.pageSinkManager = checkNotNull(pageSinkManager, "pageSinkManager is null");
+            this.inputChannels = requireNonNull(inputChannels, "inputChannels is null");
+            this.pageSinkManager = requireNonNull(pageSinkManager, "pageSinkManager is null");
             checkArgument(writerTarget instanceof CreateHandle || writerTarget instanceof InsertHandle, "writerTarget must be CreateHandle or InsertHandle");
-            this.target = checkNotNull(writerTarget, "writerTarget is null");
-            this.sampleWeightChannel = checkNotNull(sampleWeightChannel, "sampleWeightChannel is null");
+            this.target = requireNonNull(writerTarget, "writerTarget is null");
+            this.sampleWeightChannel = requireNonNull(sampleWeightChannel, "sampleWeightChannel is null");
+            this.session = session;
         }
 
         @Override
@@ -78,10 +86,10 @@ public class TableWriterOperator
         private ConnectorPageSink createPageSink()
         {
             if (target instanceof CreateHandle) {
-                return pageSinkManager.createPageSink(((CreateHandle) target).getHandle());
+                return pageSinkManager.createPageSink(session, ((CreateHandle) target).getHandle());
             }
             if (target instanceof InsertHandle) {
-                return pageSinkManager.createPageSink(((InsertHandle) target).getHandle());
+                return pageSinkManager.createPageSink(session, ((InsertHandle) target).getHandle());
             }
             throw new UnsupportedOperationException("Unhandled target type: " + target.getClass().getName());
         }
@@ -90,6 +98,12 @@ public class TableWriterOperator
         public void close()
         {
             closed = true;
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new TableWriterOperatorFactory(operatorId, pageSinkManager, target, inputChannels, sampleWeightChannel, session);
         }
     }
 
@@ -113,10 +127,10 @@ public class TableWriterOperator
             List<Integer> inputChannels,
             Optional<Integer> sampleWeightChannel)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
-        this.pageSink = checkNotNull(pageSink, "pageSink is null");
-        this.sampleWeightChannel = checkNotNull(sampleWeightChannel, "sampleWeightChannel is null");
-        this.inputChannels = checkNotNull(inputChannels, "inputChannels is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.pageSink = requireNonNull(pageSink, "pageSink is null");
+        this.sampleWeightChannel = requireNonNull(sampleWeightChannel, "sampleWeightChannel is null");
+        this.inputChannels = requireNonNull(inputChannels, "inputChannels is null");
     }
 
     @Override
@@ -154,7 +168,7 @@ public class TableWriterOperator
     @Override
     public void addInput(Page page)
     {
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
         checkState(state == State.RUNNING, "Operator is %s", state);
 
         Block[] blocks = new Block[inputChannels.size()];
@@ -177,7 +191,7 @@ public class TableWriterOperator
         }
         state = State.FINISHED;
 
-        Collection<Slice> fragments = pageSink.commit();
+        Collection<Slice> fragments = pageSink.finish();
         committed = true;
 
         PageBuilder page = new PageBuilder(TYPES);
@@ -206,7 +220,7 @@ public class TableWriterOperator
         if (!closed) {
             closed = true;
             if (!committed) {
-                pageSink.rollback();
+                pageSink.abort();
             }
         }
     }

@@ -20,7 +20,7 @@
         <property name="message" value="Blank line after opening brace"/>
     </module>
     <module name="RegexpMultiline">
-        <property name="format" value="\n\n\}"/>
+        <property name="format" value="\n\n\s*\}"/>
         <property name="message" value="Blank line before closing brace"/>
     </module>
     <module name="RegexpMultiline">
@@ -30,6 +30,10 @@
     <module name="RegexpMultiline">
         <property name="format" value="\n\n\Z"/>
         <property name="message" value="Blank line before end of file"/>
+    </module>
+    <module name="RegexpMultiline">
+        <property name="format" value="Preconditions\.checkNotNull"/>
+        <property name="message" value="Use of checkNotNull"/>
     </module>
 
     <module name="TreeWalker">
@@ -98,6 +102,12 @@
         <module name="AvoidStarImport"/>
         <module name="RedundantImport"/>
         <module name="UnusedImports"/>
+        <module name="ImportOrder">
+            <property name="groups" value="*,javax,java"/>
+            <property name="separated" value="true"/>
+            <property name="option" value="bottom"/>
+            <property name="sortStaticImportsAlphabetically" value="true"/>
+        </module>
 
         <module name="WhitespaceAround">
             <property name="allowEmptyConstructors" value="true"/>

@@ -13,43 +13,45 @@
  */
 package com.facebook.presto.memory;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
-import org.weakref.jmx.MBeanExporter;
-import org.weakref.jmx.ObjectNames;
 
-import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
 import java.util.List;
 import java.util.Map;
 
+import static com.facebook.presto.memory.MemoryManagerConfig.QUERY_MAX_MEMORY_PER_NODE_CONFIG;
+import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public final class LocalMemoryManager
 {
     public static final MemoryPoolId GENERAL_POOL = new MemoryPoolId("general");
     public static final MemoryPoolId RESERVED_POOL = new MemoryPoolId("reserved");
+    public static final MemoryPoolId SYSTEM_POOL = new MemoryPoolId("system");
 
     private final DataSize maxMemory;
-    private final MBeanExporter exporter;
     private final Map<MemoryPoolId, MemoryPool> pools;
 
     @Inject
-    public LocalMemoryManager(MemoryManagerConfig config, ReservedSystemMemoryConfig systemMemoryConfig, MBeanExporter exporter)
+    public LocalMemoryManager(MemoryManagerConfig config, ReservedSystemMemoryConfig systemMemoryConfig)
     {
-        this.exporter = requireNonNull(exporter, "exporter is null");
         requireNonNull(config, "config is null");
         requireNonNull(systemMemoryConfig, "systemMemoryConfig is null");
-        maxMemory = new DataSize(Runtime.getRuntime().maxMemory() - systemMemoryConfig.getReservedSystemMemory().toBytes(), BYTE);
+        long maxHeap = Runtime.getRuntime().maxMemory();
+        checkArgument(systemMemoryConfig.getReservedSystemMemory().toBytes() < maxHeap, "Reserved memory %s is greater than available heap %s", systemMemoryConfig.getReservedSystemMemory(), new DataSize(maxHeap, BYTE));
+        maxMemory = new DataSize(maxHeap - systemMemoryConfig.getReservedSystemMemory().toBytes(), BYTE);
 
         ImmutableMap.Builder<MemoryPoolId, MemoryPool> builder = ImmutableMap.builder();
-        builder.put(RESERVED_POOL, createPool(RESERVED_POOL, config.getMaxQueryMemoryPerNode(), exporter, config.isClusterMemoryManagerEnabled()));
-        DataSize generalPoolSize = new DataSize(maxMemory.toBytes() - config.getMaxQueryMemoryPerNode().toBytes(), BYTE);
-        builder.put(GENERAL_POOL, createPool(GENERAL_POOL, generalPoolSize, exporter, config.isClusterMemoryManagerEnabled()));
+        checkArgument(config.getMaxQueryMemoryPerNode().toBytes() < maxMemory.toBytes(), format("%s set to %s, but only %s of useable heap available", QUERY_MAX_MEMORY_PER_NODE_CONFIG, config.getMaxQueryMemoryPerNode(), maxMemory));
+        builder.put(RESERVED_POOL, new MemoryPool(RESERVED_POOL, config.getMaxQueryMemoryPerNode()));
+        DataSize generalPoolSize = new DataSize(Math.max(0, maxMemory.toBytes() - config.getMaxQueryMemoryPerNode().toBytes()), BYTE);
+        builder.put(GENERAL_POOL, new MemoryPool(GENERAL_POOL, generalPoolSize));
+        builder.put(SYSTEM_POOL, new MemoryPool(SYSTEM_POOL, systemMemoryConfig.getReservedSystemMemory()));
         this.pools = builder.build();
     }
 
@@ -62,7 +64,6 @@ public final class LocalMemoryManager
         return new MemoryInfo(maxMemory, builder.build());
     }
 
-    @VisibleForTesting
     public List<MemoryPool> getPools()
     {
         return ImmutableList.copyOf(pools.values());
@@ -71,22 +72,5 @@ public final class LocalMemoryManager
     public MemoryPool getPool(MemoryPoolId id)
     {
         return pools.get(id);
-    }
-
-    private static MemoryPool createPool(MemoryPoolId id, DataSize size, MBeanExporter exporter, boolean enableBlocking)
-    {
-        MemoryPool pool = new MemoryPool(id, size, enableBlocking);
-        String objectName = ObjectNames.builder(MemoryPool.class, pool.getId().toString()).build();
-        exporter.export(objectName, pool);
-        return pool;
-    }
-
-    @PreDestroy
-    public void destroy()
-    {
-        for (MemoryPool pool : pools.values()) {
-            String objectName = ObjectNames.builder(MemoryPool.class, pool.getId().toString()).build();
-            exporter.unexport(objectName);
-        }
     }
 }

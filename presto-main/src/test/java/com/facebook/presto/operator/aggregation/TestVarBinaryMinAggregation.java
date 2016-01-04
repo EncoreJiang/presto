@@ -26,19 +26,18 @@ import io.airlift.slice.Slices;
 import java.util.List;
 
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 public class TestVarBinaryMinAggregation
         extends AbstractTestAggregationFunction
 {
     @Override
-    public Block getSequenceBlock(int start, int length)
+    public Block[] getSequenceBlocks(int start, int length)
     {
         BlockBuilder blockBuilder = VARBINARY.createBlockBuilder(new BlockBuilderStatus(), length);
         for (int i = 0; i < length; i++) {
             VARBINARY.writeSlice(blockBuilder, Slices.wrappedBuffer(Ints.toByteArray(i)));
         }
-        return blockBuilder.build();
+        return new Block[] {blockBuilder.build()};
     }
 
     @Override
@@ -52,7 +51,7 @@ public class TestVarBinaryMinAggregation
             Slice slice = Slices.wrappedBuffer(Ints.toByteArray(i));
             min = (min == null) ? slice : Ordering.natural().min(min, slice);
         }
-        return min.toString(UTF_8);
+        return min.toStringUtf8();
     }
 
     @Override

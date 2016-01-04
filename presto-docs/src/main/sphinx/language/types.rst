@@ -27,10 +27,18 @@ VARCHAR
 
     Variable length character data.
 
+    .. note::
+
+        Character strings with length are not yet supported: ``varchar(n)``
+
 VARBINARY
 ---------
 
     Variable length binary data.
+
+    .. note::
+
+        Binary strings with length are not yet supported: ``varbinary(n)``
 
 JSON
 ----
@@ -106,6 +114,8 @@ MAP
 
     A map between the given component types.
 
+    Example: ``MAP(ARRAY['foo', 'bar'], ARRAY[1, 2])``
+
 .. _row_type:
 
 ROW
@@ -115,4 +125,3 @@ ROW
     accessed with field reference operator ``.``
 
     Example: ``my_column.my_field``
-

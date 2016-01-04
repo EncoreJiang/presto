@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.hive.metastore.HiveMetastoreClient;
 import com.google.common.net.HostAndPort;
 import com.google.common.primitives.Ints;
 import io.airlift.units.Duration;
@@ -23,6 +24,7 @@ import org.apache.thrift.transport.TTransportException;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Proxy;
@@ -60,34 +62,61 @@ public class HiveMetastoreClientFactory
     public HiveMetastoreClient create(String host, int port)
             throws TTransportException
     {
-        return new HiveMetastoreClient(createTransport(host, port));
+        return new ThriftHiveMetastoreClient(createTransport(host, port));
+    }
+
+    protected TTransport createRawTransport(String host, int port)
+            throws TTransportException
+    {
+        if (socksProxy == null) {
+            TTransport transport = new TSocket(host, port, timeoutMillis);
+
+            try {
+                transport.open();
+                return transport;
+            }
+            catch (Throwable t) {
+                transport.close();
+                throw t;
+            }
+        }
+
+        Socket socks = createSocksSocket(socksProxy);
+        try {
+            try {
+                socks.connect(InetSocketAddress.createUnresolved(host, port), timeoutMillis);
+                socks.setSoTimeout(timeoutMillis);
+                return new TSocket(socks);
+            }
+            catch (Throwable t) {
+                closeQuietly(socks);
+                throw t;
+            }
+        }
+        catch (IOException e) {
+            throw new TTransportException(e);
+        }
     }
 
     protected TTransport createTransport(String host, int port)
             throws TTransportException
     {
-        TTransport transport;
-        if (socksProxy == null) {
-            transport = new TTransportWrapper(new TSocket(host, port, timeoutMillis), host);
-            transport.open();
+        try {
+            return new TTransportWrapper(createRawTransport(host, port), host);
         }
-        else {
-            Socket socks = createSocksSocket(socksProxy);
-            try {
-                socks.connect(InetSocketAddress.createUnresolved(host, port), timeoutMillis);
-                socks.setSoTimeout(timeoutMillis);
-            }
-            catch (IOException e) {
-                throw rewriteException(new TTransportException(e), host);
-            }
-            try {
-                transport = new TTransportWrapper(new TSocket(socks), host);
-            }
-            catch (TTransportException e) {
-                throw rewriteException(e, host);
-            }
+        catch (TTransportException e) {
+            throw rewriteException(e, host);
         }
-        return transport;
+    }
+
+    private static void closeQuietly(Closeable closeable)
+    {
+        try {
+            closeable.close();
+        }
+        catch (IOException e) {
+            // ignored
+        }
     }
 
     private static class TTransportWrapper

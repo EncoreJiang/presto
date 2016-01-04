@@ -21,9 +21,8 @@ import com.google.common.collect.ImmutableList;
 import javax.inject.Inject;
 
 import java.util.List;
-import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class IndexedTpchPlugin
         implements Plugin
@@ -33,7 +32,7 @@ public class IndexedTpchPlugin
 
     public IndexedTpchPlugin(TpchIndexSpec indexSpec)
     {
-        this.indexSpec = checkNotNull(indexSpec, "indexSpec is null");
+        this.indexSpec = requireNonNull(indexSpec, "indexSpec is null");
     }
 
     public IndexedTpchPlugin()
@@ -48,15 +47,10 @@ public class IndexedTpchPlugin
     }
 
     @Override
-    public void setOptionalConfig(Map<String, String> optionalConfig)
-    {
-    }
-
-    @Override
     public <T> List<T> getServices(Class<T> type)
     {
         if (type == ConnectorFactory.class) {
-            checkNotNull(nodeManager, "nodeManager is null");
+            requireNonNull(nodeManager, "nodeManager is null");
             return ImmutableList.of(type.cast(new IndexedTpchConnectorFactory(nodeManager, indexSpec, 4)));
         }
         return ImmutableList.of();

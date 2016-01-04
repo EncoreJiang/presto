@@ -13,11 +13,14 @@
  */
 package com.facebook.presto.execution;
 
+import com.facebook.presto.execution.scheduler.NodeSchedulerConfig;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.configuration.testing.ConfigAssertions;
 import org.testng.annotations.Test;
 
 import java.util.Map;
+
+import static com.facebook.presto.execution.scheduler.NodeSchedulerConfig.LEGACY_NETWORK_TOPOLOGY;
 
 public class TestNodeSchedulerConfig
 {
@@ -25,11 +28,11 @@ public class TestNodeSchedulerConfig
     public void testDefaults()
     {
         ConfigAssertions.assertRecordedDefaults(ConfigAssertions.recordDefaults(NodeSchedulerConfig.class)
+                .setNetworkTopology(LEGACY_NETWORK_TOPOLOGY)
                 .setMinCandidates(10)
                 .setMaxSplitsPerNode(100)
                 .setMaxPendingSplitsPerNodePerTask(10)
                 .setIncludeCoordinator(true)
-                .setLocationAwareSchedulingEnabled(true)
                 .setMultipleTasksPerNodeEnabled(false));
     }
 
@@ -37,8 +40,8 @@ public class TestNodeSchedulerConfig
     public void testExplicitPropertyMappings()
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
+                .put("node-scheduler.network-topology", "flat")
                 .put("node-scheduler.min-candidates", "11")
-                .put("node-scheduler.location-aware-scheduling-enabled", "false")
                 .put("node-scheduler.include-coordinator", "false")
                 .put("node-scheduler.max-pending-splits-per-node-per-task", "11")
                 .put("node-scheduler.max-splits-per-node", "101")
@@ -46,8 +49,8 @@ public class TestNodeSchedulerConfig
                 .build();
 
         NodeSchedulerConfig expected = new NodeSchedulerConfig()
+                .setNetworkTopology("flat")
                 .setIncludeCoordinator(false)
-                .setLocationAwareSchedulingEnabled(false)
                 .setMultipleTasksPerNodeEnabled(true)
                 .setMaxSplitsPerNode(101)
                 .setMaxPendingSplitsPerNodePerTask(11)

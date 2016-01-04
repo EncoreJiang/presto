@@ -23,16 +23,11 @@ import com.facebook.presto.operator.Driver;
 import com.facebook.presto.operator.DriverContext;
 import com.facebook.presto.operator.DriverFactory;
 import com.facebook.presto.operator.DriverStats;
-import com.facebook.presto.operator.OutputFactory;
-import com.facebook.presto.operator.PartitionedOutputOperator.PartitionedOutputFactory;
 import com.facebook.presto.operator.PipelineContext;
 import com.facebook.presto.operator.TaskContext;
-import com.facebook.presto.operator.TaskOutputOperator.TaskOutputFactory;
-import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner.LocalExecutionPlan;
 import com.facebook.presto.sql.planner.PlanFragment;
-import com.facebook.presto.sql.planner.PlanFragment.OutputPartitioning;
 import com.facebook.presto.sql.planner.PlanFragment.PlanDistribution;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.base.Throwables;
@@ -60,13 +55,13 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.sql.planner.PlanFragment.PlanDistribution.COORDINATOR_ONLY;
+import static com.facebook.presto.sql.planner.PlanFragment.PlanDistribution.SINGLE;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static java.lang.Math.max;
-import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public class SqlTaskExecution
 {
@@ -137,37 +132,29 @@ public class SqlTaskExecution
             QueryMonitor queryMonitor,
             Executor notificationExecutor)
     {
-        this.taskStateMachine = checkNotNull(taskStateMachine, "taskStateMachine is null");
+        this.taskStateMachine = requireNonNull(taskStateMachine, "taskStateMachine is null");
         this.taskId = taskStateMachine.getTaskId();
-        this.taskContext = checkNotNull(taskContext, "taskContext is null");
-        this.sharedBuffer = checkNotNull(sharedBuffer, "sharedBuffer is null");
+        this.taskContext = requireNonNull(taskContext, "taskContext is null");
+        this.sharedBuffer = requireNonNull(sharedBuffer, "sharedBuffer is null");
 
-        this.taskExecutor = checkNotNull(taskExecutor, "driverExecutor is null");
-        this.notificationExecutor = checkNotNull(notificationExecutor, "notificationExecutor is null");
+        this.taskExecutor = requireNonNull(taskExecutor, "driverExecutor is null");
+        this.notificationExecutor = requireNonNull(notificationExecutor, "notificationExecutor is null");
 
-        this.queryMonitor = checkNotNull(queryMonitor, "queryMonitor is null");
+        this.queryMonitor = requireNonNull(queryMonitor, "queryMonitor is null");
 
         try (SetThreadName ignored = new SetThreadName("Task-%s", taskId)) {
             List<DriverFactory> driverFactories;
             try {
-                OutputFactory outputOperatorFactory;
-                if (fragment.getOutputPartitioning() == OutputPartitioning.NONE) {
-                    outputOperatorFactory = new TaskOutputFactory(sharedBuffer);
-                }
-                else if (fragment.getOutputPartitioning() == OutputPartitioning.HASH) {
-                    outputOperatorFactory = new PartitionedOutputFactory(sharedBuffer);
-                }
-                else {
-                    throw new PrestoException(NOT_SUPPORTED, format("OutputPartitioning %s is not supported", fragment.getOutputPartitioning()));
-                }
-
+                PlanDistribution distribution = fragment.getDistribution();
                 LocalExecutionPlan localExecutionPlan = planner.plan(
                         taskContext.getSession(),
                         fragment.getRoot(),
                         fragment.getOutputLayout(),
                         fragment.getSymbols(),
-                        fragment.getDistribution(),
-                        outputOperatorFactory);
+                        fragment.getPartitionFunction(),
+                        sharedBuffer,
+                        distribution == COORDINATOR_ONLY || distribution == SINGLE,
+                        fragment.getPartitionedSource() == null);
                 driverFactories = localExecutionPlan.getDriverFactories();
             }
             catch (Throwable e) {
@@ -190,7 +177,7 @@ public class SqlTaskExecution
             }
             this.unpartitionedDriverFactories = unpartitionedDriverFactories.build();
 
-            if (fragment.getDistribution() == PlanDistribution.SOURCE) {
+            if (fragment.getPartitionedSource() != null) {
                 checkArgument(partitionedDriverFactory != null, "Fragment is partitioned, but no partitioned driver found");
             }
             this.partitionedSourceId = fragment.getPartitionedSource();
@@ -237,7 +224,7 @@ public class SqlTaskExecution
 
     public void addSources(List<TaskSource> sources)
     {
-        checkNotNull(sources, "sources is null");
+        requireNonNull(sources, "sources is null");
         checkState(!Thread.holdsLock(this), "Can not add sources while holding a lock on the %s", getClass().getSimpleName());
 
         try (SetThreadName ignored = new SetThreadName("Task-%s", taskId)) {
@@ -539,8 +526,8 @@ public class SqlTaskExecution
 
         private DriverSplitRunner(DriverSplitRunnerFactory driverSplitRunnerFactory, DriverContext driverContext, @Nullable ScheduledSplit partitionedSplit)
         {
-            this.driverSplitRunnerFactory = checkNotNull(driverSplitRunnerFactory, "driverFactory is null");
-            this.driverContext = checkNotNull(driverContext, "driverContext is null");
+            this.driverSplitRunnerFactory = requireNonNull(driverSplitRunnerFactory, "driverFactory is null");
+            this.driverContext = requireNonNull(driverContext, "driverContext is null");
             this.partitionedSplit = partitionedSplit;
         }
 
@@ -587,6 +574,12 @@ public class SqlTaskExecution
         }
 
         @Override
+        public String getInfo()
+        {
+            return (partitionedSplit == null) ? "" : partitionedSplit.getSplit().getInfo().toString();
+        }
+
+        @Override
         public void close()
         {
             Driver driver;
@@ -609,14 +602,14 @@ public class SqlTaskExecution
 
         private RemoveTaskHandleWhenDone(TaskExecutor taskExecutor, TaskHandle taskHandle)
         {
-            this.taskExecutor = checkNotNull(taskExecutor, "taskExecutor is null");
-            this.taskHandle = checkNotNull(taskHandle, "taskHandle is null");
+            this.taskExecutor = requireNonNull(taskExecutor, "taskExecutor is null");
+            this.taskHandle = requireNonNull(taskHandle, "taskHandle is null");
         }
 
         @Override
-        public void stateChanged(TaskState taskState)
+        public void stateChanged(TaskState newState)
         {
-            if (taskState.isDone()) {
+            if (newState.isDone()) {
                 taskExecutor.removeTask(taskHandle);
             }
         }
@@ -634,9 +627,9 @@ public class SqlTaskExecution
         }
 
         @Override
-        public void stateChanged(BufferState taskState)
+        public void stateChanged(BufferState newState)
         {
-            if (taskState == BufferState.FINISHED) {
+            if (newState == BufferState.FINISHED) {
                 SqlTaskExecution sqlTaskExecution = sqlTaskExecutionReference.get();
                 if (sqlTaskExecution != null) {
                     sqlTaskExecution.checkTaskCompletion();

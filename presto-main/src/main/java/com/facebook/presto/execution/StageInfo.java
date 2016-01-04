@@ -17,7 +17,6 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 
 import javax.annotation.Nullable;
@@ -27,6 +26,7 @@ import java.net.URI;
 import java.util.List;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class StageInfo
@@ -39,7 +39,7 @@ public class StageInfo
     private final StageStats stageStats;
     private final List<TaskInfo> tasks;
     private final List<StageInfo> subStages;
-    private final List<ExecutionFailureInfo> failures;
+    private final ExecutionFailureInfo failureCause;
 
     @JsonCreator
     public StageInfo(
@@ -51,15 +51,14 @@ public class StageInfo
             @JsonProperty("stageStats") StageStats stageStats,
             @JsonProperty("tasks") List<TaskInfo> tasks,
             @JsonProperty("subStages") List<StageInfo> subStages,
-            @JsonProperty("failures") List<ExecutionFailureInfo> failures)
+            @JsonProperty("failureCause") ExecutionFailureInfo failureCause)
     {
-        Preconditions.checkNotNull(stageId, "stageId is null");
-        Preconditions.checkNotNull(state, "state is null");
-        Preconditions.checkNotNull(self, "self is null");
-        Preconditions.checkNotNull(stageStats, "stageStats is null");
-        Preconditions.checkNotNull(tasks, "tasks is null");
-        Preconditions.checkNotNull(subStages, "subStages is null");
-        Preconditions.checkNotNull(failures, "failures is null");
+        requireNonNull(stageId, "stageId is null");
+        requireNonNull(state, "state is null");
+        requireNonNull(self, "self is null");
+        requireNonNull(stageStats, "stageStats is null");
+        requireNonNull(tasks, "tasks is null");
+        requireNonNull(subStages, "subStages is null");
 
         this.stageId = stageId;
         this.state = state;
@@ -69,7 +68,7 @@ public class StageInfo
         this.stageStats = stageStats;
         this.tasks = ImmutableList.copyOf(tasks);
         this.subStages = subStages;
-        this.failures = failures;
+        this.failureCause = failureCause;
     }
 
     @JsonProperty
@@ -122,9 +121,9 @@ public class StageInfo
     }
 
     @JsonProperty
-    public List<ExecutionFailureInfo> getFailures()
+    public ExecutionFailureInfo getFailureCause()
     {
-        return failures;
+        return failureCause;
     }
 
     @Override

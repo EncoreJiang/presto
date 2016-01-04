@@ -103,7 +103,9 @@ public class TestStatementBuilder
         printStatement("show partitions from foo where name = 'foo'");
         printStatement("show partitions from foo order by x");
         printStatement("show partitions from foo limit 10");
+        printStatement("show partitions from foo limit all");
         printStatement("show partitions from foo order by x desc limit 10");
+        printStatement("show partitions from foo order by x desc limit all");
 
         printStatement("show functions");
 
@@ -116,6 +118,7 @@ public class TestStatementBuilder
 
         printStatement("select * from foo tablesample system (10+1)");
         printStatement("select * from foo tablesample system (10) join bar tablesample bernoulli (30) on a.id = b.id");
+        printStatement("select * from foo tablesample system (10) join bar tablesample bernoulli (30) on not(a.id > b.id)");
 
         printStatement("select * from foo tablesample bernoulli (10) stratify on (id)");
         printStatement("select * from foo tablesample system (50) stratify on (id, name)");
@@ -124,10 +127,15 @@ public class TestStatementBuilder
 
         printStatement("select * from foo approximate at 90 confidence");
 
-        printStatement("create table foo as select * from abc");
+        printStatement("create table foo as (select * from abc)");
+        printStatement("create table foo with (a = 'apple', b = 'banana') as select * from abc");
+        printStatement("create table foo as select * from abc WITH NO DATA");
         printStatement("drop table foo");
 
         printStatement("insert into foo select * from abc");
+
+        printStatement("delete from foo");
+        printStatement("delete from foo where a = b");
 
         printStatement("values ('a', 1, 2.2), ('b', 2, 3.3)");
 
@@ -136,6 +144,9 @@ public class TestStatementBuilder
         printStatement("(table foo)");
         printStatement("(table foo) limit 10");
         printStatement("(table foo limit 5) limit 10");
+
+        printStatement("select * from a limit all");
+        printStatement("select * from a order by x limit all");
 
         printStatement("select * from a union select * from b");
         printStatement("table a union all table b");
@@ -153,13 +164,22 @@ public class TestStatementBuilder
         printStatement("alter table foo rename to bar");
         printStatement("alter table a.b.c rename to d.e.f");
 
+        printStatement("alter table a.b.c rename column x to y");
+
+        printStatement("alter table a.b.c add column x bigint");
+
         printStatement("create table test (a boolean, b bigint, c double, d varchar, e timestamp)");
+        printStatement("create table if not exists baz (a timestamp, b varchar)");
+        printStatement("create table test (a boolean, b bigint) with (a = 'apple', b = 'banana')");
         printStatement("drop table test");
 
         printStatement("create view foo as with a as (select 123) select * from a");
         printStatement("create or replace view foo as select 123 from t");
 
         printStatement("drop view foo");
+
+        printStatement("insert into t select * from t");
+        printStatement("insert into t (c1, c2) select * from t");
     }
 
     @Test

@@ -25,10 +25,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.block.BlockAssertions.createLongSequenceBlock;
+import static com.facebook.presto.block.BlockAssertions.createLongsBlock;
 import static com.facebook.presto.operator.GroupByHash.createGroupByHash;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.type.TypeUtils.getHashBlock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -36,6 +39,7 @@ import static org.testng.Assert.assertTrue;
 public class TestGroupByHash
 {
     private static final int MAX_GROUP_ID = 500;
+    private static final int[] CONTAINS_CHANNELS = new int[] { 0 };
 
     @Test
     public void testAddPage()
@@ -63,6 +67,29 @@ public class TestGroupByHash
                 }
             }
         }
+    }
+
+    @Test
+    public void testNullGroup()
+            throws Exception
+    {
+        GroupByHash groupByHash = createGroupByHash(ImmutableList.of(BIGINT), new int[] {0}, Optional.<Integer>empty(), Optional.of(1), 100);
+
+        Block block = createLongsBlock((Long) null);
+        Block hashBlock = getHashBlock(ImmutableList.of(BIGINT), block);
+        Page page = new Page(block, hashBlock);
+        groupByHash.addPage(page);
+
+        // Add enough values to force a rehash
+        block = createLongSequenceBlock(1, 132748);
+        hashBlock = getHashBlock(ImmutableList.of(BIGINT), block);
+        page = new Page(block, hashBlock);
+        groupByHash.addPage(page);
+
+        block = createLongsBlock(0);
+        hashBlock = getHashBlock(ImmutableList.of(BIGINT), block);
+        page = new Page(block, hashBlock);
+        assertFalse(groupByHash.contains(0, page, CONTAINS_CHANNELS));
     }
 
     @Test
@@ -160,11 +187,11 @@ public class TestGroupByHash
 
         Block testBlock = BlockAssertions.createDoublesBlock((double) 3);
         Block testHashBlock = TypeUtils.getHashBlock(ImmutableList.of(DOUBLE), testBlock);
-        assertTrue(groupByHash.contains(0, new Page(testBlock, testHashBlock)));
+        assertTrue(groupByHash.contains(0, new Page(testBlock, testHashBlock), CONTAINS_CHANNELS));
 
         testBlock = BlockAssertions.createDoublesBlock(11.0);
         testHashBlock = TypeUtils.getHashBlock(ImmutableList.of(DOUBLE), testBlock);
-        assertFalse(groupByHash.contains(0, new Page(testBlock, testHashBlock)));
+        assertFalse(groupByHash.contains(0, new Page(testBlock, testHashBlock), CONTAINS_CHANNELS));
     }
 
     @Test
@@ -174,13 +201,14 @@ public class TestGroupByHash
         Block valuesBlock = BlockAssertions.createDoubleSequenceBlock(0, 10);
         Block stringValuesBlock = BlockAssertions.createStringSequenceBlock(0, 10);
         Block hashBlock = TypeUtils.getHashBlock(ImmutableList.of(DOUBLE, VARCHAR), valuesBlock, stringValuesBlock);
-        GroupByHash groupByHash = createGroupByHash(ImmutableList.of(DOUBLE, VARCHAR), new int[] { 0, 1 }, Optional.<Integer>empty(), Optional.of(2), 100);
+        int[] hashChannels = { 0, 1 };
+        GroupByHash groupByHash = createGroupByHash(ImmutableList.of(DOUBLE, VARCHAR), hashChannels, Optional.<Integer>empty(), Optional.of(2), 100);
         groupByHash.getGroupIds(new Page(valuesBlock, stringValuesBlock, hashBlock));
 
         Block testValuesBlock = BlockAssertions.createDoublesBlock((double) 3);
         Block testStringValuesBlock = BlockAssertions.createStringsBlock("3");
         Block testHashBlock = TypeUtils.getHashBlock(ImmutableList.of(DOUBLE, VARCHAR), testValuesBlock, testStringValuesBlock);
-        assertTrue(groupByHash.contains(0, new Page(testValuesBlock, testStringValuesBlock, testHashBlock)));
+        assertTrue(groupByHash.contains(0, new Page(testValuesBlock, testStringValuesBlock, testHashBlock), hashChannels));
     }
 
     @Test
@@ -197,7 +225,7 @@ public class TestGroupByHash
 
         // Ensure that all groups are present in group by hash
         for (int i = 0; i < valuesBlock.getPositionCount(); i++) {
-            assertTrue(groupByHash.contains(i, new Page(valuesBlock, hashBlock)));
+            assertTrue(groupByHash.contains(i, new Page(valuesBlock, hashBlock), CONTAINS_CHANNELS));
         }
     }
 }

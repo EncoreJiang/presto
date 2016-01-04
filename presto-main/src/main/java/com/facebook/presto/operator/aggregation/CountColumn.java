@@ -13,16 +13,15 @@
  */
 package com.facebook.presto.operator.aggregation;
 
-import com.facebook.presto.byteCode.DynamicClassLoader;
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.bytecode.DynamicClassLoader;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricAggregation;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlAggregationFunction;
 import com.facebook.presto.operator.aggregation.state.AccumulatorStateFactory;
 import com.facebook.presto.operator.aggregation.state.AccumulatorStateSerializer;
 import com.facebook.presto.operator.aggregation.state.LongState;
 import com.facebook.presto.operator.aggregation.state.StateCompiler;
 import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
@@ -39,22 +38,20 @@ import static com.facebook.presto.operator.aggregation.AggregationMetadata.Param
 import static com.facebook.presto.operator.aggregation.AggregationMetadata.ParameterMetadata.ParameterType.STATE;
 import static com.facebook.presto.operator.aggregation.AggregationUtils.generateAggregationName;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public class CountColumn
-        extends ParametricAggregation
+        extends SqlAggregationFunction
 {
     public static final CountColumn COUNT_COLUMN = new CountColumn();
     private static final String NAME = "count";
-    private static final Signature SIGNATURE = new Signature(NAME, ImmutableList.of(typeParameter("T")), StandardTypes.BIGINT, ImmutableList.of("T"), false, false);
     private static final MethodHandle INPUT_FUNCTION = methodHandle(CountColumn.class, "input", LongState.class, Block.class, int.class);
     private static final MethodHandle COMBINE_FUNCTION = methodHandle(CountColumn.class, "combine", LongState.class, LongState.class);
+    private static final MethodHandle OUTPUT_FUNCTION = methodHandle(CountColumn.class, "output", LongState.class, BlockBuilder.class);
 
-    @Override
-    public Signature getSignature()
+    public CountColumn()
     {
-        return SIGNATURE;
+        super(NAME, ImmutableList.of(typeParameter("T")), StandardTypes.BIGINT, ImmutableList.of("T"));
     }
 
     @Override
@@ -64,12 +61,10 @@ public class CountColumn
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public InternalAggregationFunction specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         Type type = types.get("T");
-        Signature signature = new Signature(NAME, parseTypeSignature(StandardTypes.BIGINT), type.getTypeSignature());
-        InternalAggregationFunction aggregation = generateAggregation(type);
-        return new FunctionInfo(signature, getDescription(), aggregation);
+        return generateAggregation(type);
     }
 
     private static InternalAggregationFunction generateAggregation(Type type)
@@ -89,7 +84,7 @@ public class CountColumn
                 null,
                 null,
                 COMBINE_FUNCTION,
-                null,
+                OUTPUT_FUNCTION,
                 LongState.class,
                 stateSerializer,
                 stateFactory,
@@ -113,5 +108,10 @@ public class CountColumn
     public static void combine(LongState state, LongState otherState)
     {
         state.setLong(state.getLong() + otherState.getLong());
+    }
+
+    public static void output(LongState state, BlockBuilder out)
+    {
+        BIGINT.writeLong(out, state.getLong());
     }
 }

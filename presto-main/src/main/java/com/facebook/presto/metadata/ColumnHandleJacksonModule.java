@@ -17,7 +17,7 @@ import com.facebook.presto.spi.ColumnHandle;
 
 import javax.inject.Inject;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ColumnHandleJacksonModule
         extends AbstractTypedJacksonModule<ColumnHandle>
@@ -25,7 +25,7 @@ public class ColumnHandleJacksonModule
     @Inject
     public ColumnHandleJacksonModule(HandleResolver handleResolver)
     {
-        super(ColumnHandle.class, "type", new ColumnHandleJsonTypeIdResolver(handleResolver));
+        super(ColumnHandle.class, new ColumnHandleJsonTypeIdResolver(handleResolver));
     }
 
     private static class ColumnHandleJsonTypeIdResolver
@@ -35,7 +35,7 @@ public class ColumnHandleJacksonModule
 
         private ColumnHandleJsonTypeIdResolver(HandleResolver handleResolver)
         {
-            this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
+            this.handleResolver = requireNonNull(handleResolver, "handleResolver is null");
         }
 
         @Override

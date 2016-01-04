@@ -15,7 +15,7 @@ Synopsis
     [ HAVING condition]
     [ UNION [ ALL | DISTINCT ] select ]
     [ ORDER BY expression [ ASC | DESC ] [, ...] ]
-    [ LIMIT count ]
+    [ LIMIT [ count | ALL ] ]
 
 where ``from_item`` is one of
 
@@ -27,10 +27,52 @@ where ``from_item`` is one of
 
     from_item join_type from_item [ ON join_condition | USING ( join_column [, ...] ) ]
 
+and ``join_type`` is one of
+
+.. code-block:: none
+
+    [ INNER ] JOIN
+    LEFT [ OUTER ] JOIN
+    RIGHT [ OUTER ] JOIN
+    FULL [ OUTER ] JOIN
+    CROSS JOIN
+
 Description
 -----------
 
 Retrieve rows from zero or more tables.
+
+WITH Clause
+-----------
+
+The ``WITH`` clause defines named relations for use within a query.
+It allows flattening nested queries or simplifying subqueries.
+For example, the following queries are equivalent::
+
+    SELECT a, b
+    FROM (
+      SELECT a, MAX(b) AS b FROM t GROUP BY a
+    ) AS x;
+
+    WITH x AS (SELECT a, MAX(b) AS b FROM t GROUP BY a)
+    SELECT a, b FROM x;
+
+This also works with multiple subqueries::
+
+    WITH
+      t1 AS (SELECT a, MAX(b) AS b FROM x GROUP BY a),
+      t2 AS (SELECT a, AVG(d) AS d FROM y GROUP BY a)
+    SELECT t1.*, t2.*
+    FROM t1
+    JOIN t2 ON t1.a = t2.a;
+
+Additionally, the relations within a ``WITH`` clause can chain::
+
+    WITH
+      x AS (SELECT a FROM t),
+      y AS (SELECT a AS b FROM x),
+      z AS (SELECT b AS c FROM y)
+    SELECT c FROM z;
 
 GROUP BY Clause
 ---------------
@@ -150,12 +192,14 @@ output expressions:
 Each expression may be composed of output columns or it may be an ordinal
 number selecting an output column by position (starting at one). The
 ``ORDER BY`` clause is evaluated as the last step of a query after any
-``GROUP BY`` or ``HAVING`` clause.
+``GROUP BY`` or ``HAVING`` clause. The default null ordering is ``NULLS LAST``,
+regardless of the ordering direction.
 
 LIMIT Clause
 ------------
 
 The ``LIMIT`` clause restricts the number of rows in the result set.
+``LIMIT ALL`` is the same as omitting the ``LIMIT`` clause.
 The following example queries a large table, but the limit clause restricts
 the output to only have five rows (because the query lacks an ``ORDER BY``,
 exactly which rows are returned is arbitrary)::
@@ -281,3 +325,72 @@ Using multiple columns::
      [7, 8, 9] | 8 | 2
      [7, 8, 9] | 9 | 3
     (5 rows)
+
+Joins
+-----
+
+Joins allow you to combine data from multiple relations.
+
+CROSS JOIN
+^^^^^^^^^^
+
+A cross join returns the Cartesian product (all combinations) of two
+relations. Cross joins can either be specified using the explit
+``CROSS JOIN`` syntax or by specifying multiple relations in the
+``FROM`` clause.
+
+Both of the following queries are equivalent::
+
+    SELECT *
+    FROM nation
+    CROSS JOIN region;
+
+    SELECT *
+    FROM nation, region;
+
+The ``nation`` table contains 25 rows and the ``region`` table contains 5 rows,
+so a cross join between the two tables produces 125 rows::
+
+    SELECT n.name AS nation, r.name AS region
+    FROM nation AS n
+    CROSS JOIN region AS r
+    ORDER BY 1, 2;
+
+.. code-block:: none
+
+         nation     |   region
+    ----------------+-------------
+     ALGERIA        | AFRICA
+     ALGERIA        | AMERICA
+     ALGERIA        | ASIA
+     ALGERIA        | EUROPE
+     ALGERIA        | MIDDLE EAST
+     ARGENTINA      | AFRICA
+     ARGENTINA      | AMERICA
+    ...
+    (125 rows)
+
+Qualifying Column Names
+^^^^^^^^^^^^^^^^^^^^^^^
+
+When two relations in a join have columns with the same name, the column
+references must be qualified using the relation alias (if the relation
+has an alias), or with the relation name::
+
+    SELECT nation.name, region.name
+    FROM nation
+    CROSS JOIN region;
+
+    SELECT n.name, r.name
+    FROM nation AS n
+    CROSS JOIN region AS r;
+
+    SELECT n.name, r.name
+    FROM nation n
+    CROSS JOIN region r;
+
+The following query will fail with the error ``Column 'name' is ambiguous``::
+
+    SELECT name
+    FROM nation
+    CROSS JOIN region;

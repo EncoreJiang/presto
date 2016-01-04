@@ -23,6 +23,7 @@ import io.airlift.slice.Slice;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
+import static com.facebook.presto.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.Character.MAX_RADIX;
@@ -38,6 +39,7 @@ public final class MathFunctions
     @SqlType(StandardTypes.BIGINT)
     public static long abs(@SqlType(StandardTypes.BIGINT) long num)
     {
+        checkCondition(num != Long.MIN_VALUE, NUMERIC_VALUE_OUT_OF_RANGE, "Value -9223372036854775808 is out of range for abs()");
         return Math.abs(num);
     }
 
@@ -218,9 +220,9 @@ public final class MathFunctions
     }
 
     @Description("value raised to the power of exponent")
-    @ScalarFunction
+    @ScalarFunction(alias = "pow")
     @SqlType(StandardTypes.DOUBLE)
-    public static double pow(@SqlType(StandardTypes.DOUBLE) double num, @SqlType(StandardTypes.DOUBLE) double exponent)
+    public static double power(@SqlType(StandardTypes.DOUBLE) double num, @SqlType(StandardTypes.DOUBLE) double exponent)
     {
         return Math.pow(num, exponent);
     }
@@ -239,6 +241,14 @@ public final class MathFunctions
     public static double random()
     {
         return ThreadLocalRandom.current().nextDouble();
+    }
+
+    @Description("a pseudo-random number between 0 and value (exclusive)")
+    @ScalarFunction(alias = "rand", deterministic = false)
+    @SqlType(StandardTypes.BIGINT)
+    public static long random(@SqlType(StandardTypes.BIGINT) long value)
+    {
+        return ThreadLocalRandom.current().nextLong(value);
     }
 
     @Description("round to nearest integer")

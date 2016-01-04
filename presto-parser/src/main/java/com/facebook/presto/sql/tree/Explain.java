@@ -17,9 +17,10 @@ import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class Explain
         extends Statement
@@ -29,7 +30,18 @@ public class Explain
 
     public Explain(Statement statement, List<ExplainOption> options)
     {
-        this.statement = checkNotNull(statement, "statement is null");
+        this(Optional.empty(), statement, options);
+    }
+
+    public Explain(NodeLocation location, Statement statement, List<ExplainOption> options)
+    {
+        this(Optional.of(location), statement, options);
+    }
+
+    private Explain(Optional<NodeLocation> location, Statement statement, List<ExplainOption> options)
+    {
+        super(location);
+        this.statement = requireNonNull(statement, "statement is null");
         if (options == null) {
             this.options = ImmutableList.of();
         }

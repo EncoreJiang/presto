@@ -13,47 +13,34 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
-import com.facebook.presto.metadata.Signature;
-import com.facebook.presto.operator.GroupByHash;
-import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.PageBuilder;
+import com.facebook.presto.metadata.SqlScalarFunction;
+import com.facebook.presto.operator.aggregation.TypedSet;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 import java.util.Map;
-import java.util.Optional;
 
 import static com.facebook.presto.metadata.Signature.comparableTypeParameter;
-import static com.facebook.presto.operator.GroupByHash.createGroupByHash;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 
 public final class ArrayDistinctFunction
-        extends ParametricScalar
+        extends SqlScalarFunction
 {
     public static final ArrayDistinctFunction ARRAY_DISTINCT_FUNCTION = new ArrayDistinctFunction();
     private static final String FUNCTION_NAME = "array_distinct";
-    private static final Signature SIGNATURE = new Signature(FUNCTION_NAME, ImmutableList.of(comparableTypeParameter("E")), "array<E>", ImmutableList.of("array<E>"), false, false);
-    private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayDistinctFunction.class, "distinct", Type.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayDistinctFunction.class, "distinct", Type.class, Block.class);
 
-    @Override
-    public Signature getSignature()
+    public ArrayDistinctFunction()
     {
-        return SIGNATURE;
+        super(FUNCTION_NAME, ImmutableList.of(comparableTypeParameter("E")), "array<E>", ImmutableList.of("array<E>"));
     }
 
     @Override
@@ -75,42 +62,38 @@ public final class ArrayDistinctFunction
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         checkArgument(types.size() == 1, format("%s expects only one argument", FUNCTION_NAME));
         Type type = types.get("E");
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(type);
-        Signature signature = new Signature(FUNCTION_NAME,
-                parameterizedTypeName("array", type.getTypeSignature()),
-                parameterizedTypeName("array", type.getTypeSignature()));
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), false, ImmutableList.of(false));
+        return new ScalarFunctionImplementation(false, ImmutableList.of(false), methodHandle, isDeterministic());
     }
 
-    public static Slice distinct(Type type, Slice array)
+    public static Block distinct(Type type, Block array)
     {
-        Block elementsBlock = readStructuralBlock(array);
-
-        if (elementsBlock.getPositionCount() == 0) {
+        if (array.getPositionCount() < 2) {
             return array;
         }
 
-        GroupByHash groupByHash = createGroupByHash(ImmutableList.of(type), new int[] {0}, Optional.<Integer>empty(), Optional.empty(), elementsBlock.getPositionCount());
-        groupByHash.getGroupIds(new Page(elementsBlock));
-
-        PageBuilder pageBuilder = new PageBuilder(groupByHash.getTypes());
-        for (int i = 0; i < groupByHash.getGroupCount(); i++) {
-            pageBuilder.declarePosition();
-            groupByHash.appendValuesTo(i, pageBuilder, 0);
-        }
-        BlockBuilder fixedWidthResultBlockBuilder = pageBuilder.getBlockBuilder(0);
-        Block fixedWidthResultBlock = fixedWidthResultBlockBuilder.build();
-
-        // Convert the fixed width block to a variable width block because of the limitations of array representation
-        BlockBuilder variableWidthBlockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), fixedWidthResultBlock.getSizeInBytes());
-        for (int i = 0; i < fixedWidthResultBlock.getPositionCount(); i++) {
-            type.appendTo(fixedWidthResultBlock, i, variableWidthBlockBuilder);
+        if (array.getPositionCount() == 2) {
+            if (type.equalTo(array, 0, array, 1)) {
+                return array.getSingleValueBlock(0);
+            }
+            else {
+                return array;
+            }
         }
 
-        return buildStructuralSlice(variableWidthBlockBuilder);
+        TypedSet typedSet = new TypedSet(type, array.getPositionCount());
+        BlockBuilder distinctElementBlockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), array.getPositionCount());
+        for (int i = 0; i < array.getPositionCount(); i++) {
+            if (!typedSet.contains(array, i)) {
+                typedSet.add(array, i);
+                type.appendTo(array, i, distinctElementBlockBuilder);
+            }
+        }
+
+        return distinctElementBlockBuilder.build();
     }
 }

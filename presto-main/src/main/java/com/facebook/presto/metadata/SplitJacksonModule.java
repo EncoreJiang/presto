@@ -17,7 +17,7 @@ import com.facebook.presto.spi.ConnectorSplit;
 
 import javax.inject.Inject;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class SplitJacksonModule
         extends AbstractTypedJacksonModule<ConnectorSplit>
@@ -25,7 +25,7 @@ public class SplitJacksonModule
     @Inject
     public SplitJacksonModule(HandleResolver handleResolver)
     {
-        super(ConnectorSplit.class, "type", new SplitJsonTypeIdResolver(handleResolver));
+        super(ConnectorSplit.class, new SplitJsonTypeIdResolver(handleResolver));
     }
 
     private static class SplitJsonTypeIdResolver
@@ -35,7 +35,7 @@ public class SplitJacksonModule
 
         private SplitJsonTypeIdResolver(HandleResolver handleResolver)
         {
-            this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
+            this.handleResolver = requireNonNull(handleResolver, "handleResolver is null");
         }
 
         @Override

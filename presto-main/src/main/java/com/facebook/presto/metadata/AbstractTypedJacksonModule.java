@@ -43,17 +43,16 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public abstract class AbstractTypedJacksonModule<T>
         extends SimpleModule
 {
-    private final String typeProperty;
+    private static final String TYPE_PROPERTY = "@type";
 
-    protected AbstractTypedJacksonModule(Class<T> baseClass, String typeProperty, JsonTypeIdResolver<T> typeIdResolver)
+    protected AbstractTypedJacksonModule(Class<T> baseClass, JsonTypeIdResolver<T> typeIdResolver)
     {
         super(baseClass.getSimpleName() + "Module", Version.unknownVersion());
-        this.typeProperty = typeProperty;
 
         TypeIdResolver typeResolver = new InternalTypeResolver((JsonTypeIdResolver<Object>) typeIdResolver);
 
@@ -69,7 +68,7 @@ public abstract class AbstractTypedJacksonModule<T>
         InternalTypeDeserializer(Class<T> baseClass, TypeIdResolver typeIdResolver)
         {
             super(baseClass);
-            this.typeDeserializer = new AsPropertyTypeDeserializer(SimpleType.construct(baseClass), typeIdResolver, typeProperty, false, null);
+            this.typeDeserializer = new AsPropertyTypeDeserializer(SimpleType.construct(baseClass), typeIdResolver, TYPE_PROPERTY, false, null);
         }
 
         @SuppressWarnings("unchecked")
@@ -90,7 +89,7 @@ public abstract class AbstractTypedJacksonModule<T>
         InternalTypeSerializer(Class<T> baseClass, TypeIdResolver typeIdResolver)
         {
             super(baseClass);
-            this.typeSerializer = new AsPropertyTypeSerializer(typeIdResolver, null, typeProperty);
+            this.typeSerializer = new AsPropertyTypeSerializer(typeIdResolver, null, TYPE_PROPERTY);
         }
 
         @Override
@@ -131,7 +130,7 @@ public abstract class AbstractTypedJacksonModule<T>
 
         InternalTypeResolver(JsonTypeIdResolver<Object> typeIdResolver)
         {
-            this.typeIdResolver = checkNotNull(typeIdResolver, "typeIdResolver is null");
+            this.typeIdResolver = requireNonNull(typeIdResolver, "typeIdResolver is null");
             simpleTypes = CacheBuilder.newBuilder().weakKeys().weakValues().build(new CacheLoader<Class<?>, SimpleType>()
             {
                 @Override
@@ -151,14 +150,14 @@ public abstract class AbstractTypedJacksonModule<T>
         @Override
         public String idFromValue(Object value)
         {
-            checkNotNull(value, "value is null");
+            requireNonNull(value, "value is null");
             return idFromValueAndType(value, value.getClass());
         }
 
         @Override
         public String idFromValueAndType(Object value, Class<?> suggestedType)
         {
-            checkNotNull(value, "value is null");
+            requireNonNull(value, "value is null");
             String type = typeIdResolver.getId(value);
             checkArgument(type != null, "Unknown class %s", suggestedType.getSimpleName());
             return type;
@@ -173,7 +172,7 @@ public abstract class AbstractTypedJacksonModule<T>
         @Override
         public JavaType typeFromId(String id)
         {
-            checkNotNull(id, "id is null");
+            requireNonNull(id, "id is null");
             Class<?> typeClass = typeIdResolver.getType(id);
             checkArgument(typeClass != null, "Unknown type id %s", id);
             return simpleTypes.getUnchecked(typeClass);

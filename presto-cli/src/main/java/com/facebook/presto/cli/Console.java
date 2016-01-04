@@ -25,9 +25,9 @@ import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Files;
-import io.airlift.command.Command;
-import io.airlift.command.HelpOption;
-import io.airlift.log.Level;
+import io.airlift.airline.Command;
+import io.airlift.airline.HelpOption;
+import io.airlift.http.client.spnego.KerberosConfig;
 import io.airlift.log.Logging;
 import io.airlift.log.LoggingConfiguration;
 import jline.console.history.FileHistory;
@@ -49,7 +49,11 @@ import java.util.regex.Pattern;
 import static com.facebook.presto.cli.Completion.commandCompleter;
 import static com.facebook.presto.cli.Completion.lowerCaseCommandCompleter;
 import static com.facebook.presto.cli.Help.getHelpText;
+import static com.facebook.presto.client.ClientSession.stripTransactionId;
+import static com.facebook.presto.client.ClientSession.withCatalogAndSchema;
 import static com.facebook.presto.client.ClientSession.withProperties;
+import static com.facebook.presto.client.ClientSession.withSessionProperties;
+import static com.facebook.presto.client.ClientSession.withTransactionId;
 import static com.facebook.presto.sql.parser.StatementSplitter.Statement;
 import static com.facebook.presto.sql.parser.StatementSplitter.isEmptyStatement;
 import static com.facebook.presto.sql.parser.StatementSplitter.squeezeStatement;
@@ -84,6 +88,7 @@ public class Console
     public void run()
     {
         ClientSession session = clientOptions.toClientSession();
+        KerberosConfig kerberosConfig = clientOptions.toKerberosConfig();
         boolean hasQuery = !Strings.isNullOrEmpty(clientOptions.execute);
         boolean isFromFile = !Strings.isNullOrEmpty(clientOptions.file);
 
@@ -91,7 +96,7 @@ public class Console
             AnsiConsole.systemInstall();
         }
 
-        initializeLogging(session.isDebug());
+        initializeLogging(clientOptions.logLevelsFile);
 
         String query = clientOptions.execute;
         if (hasQuery) {
@@ -111,7 +116,15 @@ public class Console
             }
         }
 
-        try (QueryRunner queryRunner = QueryRunner.create(session, Optional.ofNullable(clientOptions.socksProxy))) {
+        try (QueryRunner queryRunner = QueryRunner.create(
+                session,
+                Optional.ofNullable(clientOptions.socksProxy),
+                Optional.ofNullable(clientOptions.keystorePath),
+                Optional.ofNullable(clientOptions.keystorePassword),
+                Optional.ofNullable(clientOptions.krb5Principal),
+                Optional.ofNullable(clientOptions.krb5RemoteServiceName),
+                clientOptions.authenticationEnabled,
+                kerberosConfig)) {
             if (hasQuery) {
                 executeCommand(queryRunner, query, clientOptions.outputFormat);
             }
@@ -129,7 +142,10 @@ public class Console
             StringBuilder buffer = new StringBuilder();
             while (true) {
                 // read a line of input from user
-                String prompt = PROMPT_NAME + ":" + session.getSchema();
+                String prompt = PROMPT_NAME;
+                if (session.getSchema() != null) {
+                    prompt += ":" + session.getSchema();
+                }
                 if (buffer.length() > 0) {
                     prompt = Strings.repeat(" ", prompt.length() - 1) + "-";
                 }
@@ -196,7 +212,8 @@ public class Console
                 for (Statement split : splitter.getCompleteStatements()) {
                     Optional<Object> statement = getParsedStatement(split.statement());
                     if (statement.isPresent() && isSessionParameterChange(statement.get())) {
-                        session = processSessionParameterChange(statement.get(), session);
+                        Map<String, String> properties = queryRunner.getSession().getProperties();
+                        session = processSessionParameterChange(statement.get(), session, properties);
                         queryRunner.setSession(session);
                         tableNameCompleter.populateCache();
                     }
@@ -234,11 +251,12 @@ public class Console
         }
     }
 
-    static ClientSession processSessionParameterChange(Object parsedStatement, ClientSession session)
+    static ClientSession processSessionParameterChange(Object parsedStatement, ClientSession session, Map<String, String> existingProperties)
     {
         if (parsedStatement instanceof Use) {
             Use use = (Use) parsedStatement;
-            return ClientSession.withCatalogAndSchema(session, use.getCatalog().orElse(session.getCatalog()), use.getSchema());
+            session = withCatalogAndSchema(session, use.getCatalog().orElse(session.getCatalog()), use.getSchema());
+            session = withSessionProperties(session, existingProperties);
         }
         return session;
     }
@@ -266,16 +284,28 @@ public class Console
         try (Query query = queryRunner.startQuery(sql)) {
             query.renderOutput(System.out, outputFormat, interactive);
 
+            ClientSession session = queryRunner.getSession();
+
             // update session properties if present
             if (!query.getSetSessionProperties().isEmpty() || !query.getResetSessionProperties().isEmpty()) {
-                Map<String, String> sessionProperties = new HashMap<>(queryRunner.getSession().getProperties());
+                Map<String, String> sessionProperties = new HashMap<>(session.getProperties());
                 sessionProperties.putAll(query.getSetSessionProperties());
                 sessionProperties.keySet().removeAll(query.getResetSessionProperties());
-                queryRunner.setSession(withProperties(queryRunner.getSession(), sessionProperties));
+                session = withProperties(session, sessionProperties);
             }
+
+            // update transaction ID if necessary
+            if (query.isClearTransactionId()) {
+                session = stripTransactionId(session);
+            }
+            if (query.getStartedTransactionId() != null) {
+                session = withTransactionId(session, query.getStartedTransactionId());
+            }
+
+            queryRunner.setSession(session);
         }
         catch (RuntimeException e) {
-            System.out.println("Error running command: " + e.getMessage());
+            System.err.println("Error running command: " + e.getMessage());
             if (queryRunner.getSession().isDebug()) {
                 e.printStackTrace();
             }
@@ -300,25 +330,27 @@ public class Console
         return history;
     }
 
-    public static void initializeLogging(boolean debug)
+    private static void initializeLogging(String logLevelsFile)
     {
         // unhook out and err while initializing logging or logger will print to them
         PrintStream out = System.out;
         PrintStream err = System.err;
+
         try {
-            if (debug) {
-                Logging logging = Logging.initialize();
-                logging.configure(new LoggingConfiguration());
-                logging.setLevel("com.facebook.presto", Level.DEBUG);
+            LoggingConfiguration config = new LoggingConfiguration();
+
+            if (logLevelsFile == null) {
+                System.setOut(new PrintStream(nullOutputStream()));
+                System.setErr(new PrintStream(nullOutputStream()));
+
+                config.setConsoleEnabled(false);
             }
             else {
-                System.setOut(nullPrintStream());
-                System.setErr(nullPrintStream());
-
-                Logging logging = Logging.initialize();
-                logging.configure(new LoggingConfiguration());
-                logging.disableConsole();
+                config.setLevelsFile(logLevelsFile);
             }
+
+            Logging logging = Logging.initialize();
+            logging.configure(config);
         }
         catch (IOException e) {
             throw Throwables.propagate(e);
@@ -327,10 +359,5 @@ public class Console
             System.setOut(out);
             System.setErr(err);
         }
-    }
-
-    public static PrintStream nullPrintStream()
-    {
-        return new PrintStream(nullOutputStream());
     }
 }

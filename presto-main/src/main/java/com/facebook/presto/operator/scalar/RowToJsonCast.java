@@ -13,12 +13,12 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.OperatorType;
-import com.facebook.presto.metadata.ParametricOperator;
+import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.server.SliceSerializer;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
@@ -34,21 +34,20 @@ import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 
 import java.lang.invoke.MethodHandle;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
-import static com.facebook.presto.metadata.FunctionRegistry.operatorInfo;
 import static com.facebook.presto.metadata.Signature.withVariadicBound;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.type.TypeUtils.createBlock;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
 
 public class RowToJsonCast
-        extends ParametricOperator
+        extends SqlOperator
 {
     public static final RowToJsonCast ROW_TO_JSON = new RowToJsonCast();
     private static final Supplier<ObjectMapper> OBJECT_MAPPER = Suppliers.memoize(() -> new ObjectMapperProvider().get().registerModule(new SimpleModule().addSerializer(Slice.class, new SliceSerializer())));
-    private static final MethodHandle METHOD_HANDLE = methodHandle(RowToJsonCast.class, "toJson", Type.class, ConnectorSession.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(RowToJsonCast.class, "toJson", Type.class, ConnectorSession.class, Block.class);
 
     private RowToJsonCast()
     {
@@ -56,19 +55,22 @@ public class RowToJsonCast
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         checkArgument(arity == 1, "Expected arity to be 1");
         Type type = types.get("T");
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(type);
-        return operatorInfo(OperatorType.CAST, parseTypeSignature(StandardTypes.JSON), ImmutableList.of(type.getTypeSignature()), methodHandle, false, ImmutableList.of(false));
+        return new ScalarFunctionImplementation(false, ImmutableList.of(false), methodHandle, isDeterministic());
     }
 
-    public static Slice toJson(Type rowType, ConnectorSession session, Slice row)
+    public static Slice toJson(Type rowType, ConnectorSession session, Block row)
     {
-        Object object = rowType.getObjectValue(session, createBlock(rowType, row), 0);
+        List<Object> objectValue = new ArrayList<>(row.getPositionCount());
+        for (int i = 0; i < row.getPositionCount(); i++) {
+            objectValue.add(rowType.getTypeParameters().get(i).getObjectValue(session, row, i));
+        }
         try {
-            return Slices.utf8Slice(OBJECT_MAPPER.get().writeValueAsString(object));
+            return Slices.utf8Slice(OBJECT_MAPPER.get().writeValueAsString(objectValue));
         }
         catch (JsonProcessingException e) {
             throw Throwables.propagate(e);

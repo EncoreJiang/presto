@@ -30,16 +30,17 @@ import java.util.Map;
 import java.util.ServiceLoader;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static java.util.Objects.requireNonNull;
 
 public class RaptorPlugin
         implements Plugin
 {
     private final String name;
-    private final Module module;
+    private final Module metadataModule;
+    private final Map<String, Module> backupProviders;
 
     private Map<String, String> optionalConfig = ImmutableMap.of();
     private NodeManager nodeManager;
@@ -54,20 +55,21 @@ public class RaptorPlugin
 
     private RaptorPlugin(PluginInfo info)
     {
-        this(info.getName(), info.getModule());
+        this(info.getName(), info.getMetadataModule(), info.getBackupProviders());
     }
 
-    public RaptorPlugin(String name, Module module)
+    public RaptorPlugin(String name, Module metadataModule, Map<String, Module> backupProviders)
     {
         checkArgument(!isNullOrEmpty(name), "name is null or empty");
         this.name = name;
-        this.module = checkNotNull(module, "module is null");
+        this.metadataModule = requireNonNull(metadataModule, "metadataModule is null");
+        this.backupProviders = ImmutableMap.copyOf(requireNonNull(backupProviders, "backupProviders is null"));
     }
 
     @Override
     public void setOptionalConfig(Map<String, String> optionalConfig)
     {
-        this.optionalConfig = ImmutableMap.copyOf(checkNotNull(optionalConfig, "optionalConfig is null"));
+        this.optionalConfig = ImmutableMap.copyOf(requireNonNull(optionalConfig, "optionalConfig is null"));
     }
 
     @Inject
@@ -85,13 +87,13 @@ public class RaptorPlugin
     @Inject
     public void setBlockEncodingSerde(BlockEncodingSerde blockEncodingSerde)
     {
-        this.blockEncodingSerde = checkNotNull(blockEncodingSerde, "blockEncodingSerde is null");
+        this.blockEncodingSerde = requireNonNull(blockEncodingSerde, "blockEncodingSerde is null");
     }
 
     @Inject
     public void setTypeManager(TypeManager typeManager)
     {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     @Override
@@ -104,7 +106,8 @@ public class RaptorPlugin
         if (type == ConnectorFactory.class) {
             return ImmutableList.of(type.cast(new RaptorConnectorFactory(
                     name,
-                    module,
+                    metadataModule,
+                    backupProviders,
                     optionalConfig,
                     nodeManager,
                     pageSorter,

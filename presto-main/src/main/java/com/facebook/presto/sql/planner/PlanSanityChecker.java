@@ -14,7 +14,9 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.DeleteNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
+import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
@@ -22,6 +24,7 @@ import com.facebook.presto.sql.planner.plan.IndexSourceNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
+import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
@@ -32,7 +35,7 @@ import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
@@ -43,7 +46,6 @@ import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 
@@ -53,6 +55,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.facebook.presto.sql.planner.optimizations.IndexJoinOptimizer.IndexKeyTracer;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableSet;
 import static com.google.common.base.Preconditions.checkArgument;
 
 /**
@@ -339,9 +342,9 @@ public final class PlanSanityChecker
                 checkArgument(indexSourceInputs.contains(clause.getIndex()), "Index symbol from index join clause (%s) not in index source (%s)", clause.getIndex(), node.getIndexSource().getOutputSymbols());
             }
 
-            Set<Symbol> lookupSymbols = FluentIterable.from(node.getCriteria())
-                    .transform(IndexJoinNode.EquiJoinClause::getIndex)
-                    .toSet();
+            Set<Symbol> lookupSymbols = node.getCriteria().stream()
+                    .map(IndexJoinNode.EquiJoinClause::getIndex)
+                    .collect(toImmutableSet());
             Map<Symbol, Symbol> trace = IndexKeyTracer.trace(node.getIndexSource(), lookupSymbols);
             checkArgument(!trace.isEmpty() && lookupSymbols.containsAll(trace.keySet()),
                     "Index lookup symbols are not traceable to index source: %s",
@@ -407,6 +410,12 @@ public final class PlanSanityChecker
         @Override
         public Void visitExchange(ExchangeNode node, Void context)
         {
+            for (int i = 0; i < node.getSources().size(); i++) {
+                PlanNode subplan = node.getSources().get(i);
+                checkDependencies(subplan.getOutputSymbols(), node.getInputs().get(i), "EXCHANGE subplan must provide all of the necessary symbols");
+                subplan.accept(this, context); // visit child
+            }
+
             verifyUniqueId(node);
 
             return null;
@@ -428,7 +437,28 @@ public final class PlanSanityChecker
         }
 
         @Override
-        public Void visitTableCommit(TableCommitNode node, Void context)
+        public Void visitDelete(DeleteNode node, Void context)
+        {
+            PlanNode source = node.getSource();
+            source.accept(this, context); // visit child
+
+            verifyUniqueId(node);
+
+            checkArgument(source.getOutputSymbols().contains(node.getRowId()), "Invalid node. Row ID symbol (%s) is not in source plan output (%s)", node.getRowId(), node.getSource().getOutputSymbols());
+
+            return null;
+        }
+
+        @Override
+        public Void visitMetadataDelete(MetadataDeleteNode node, Void context)
+        {
+            verifyUniqueId(node);
+
+            return null;
+        }
+
+        @Override
+        public Void visitTableFinish(TableFinishNode node, Void context)
         {
             node.getSource().accept(this, context); // visit child
 
@@ -445,6 +475,16 @@ public final class PlanSanityChecker
                 checkDependencies(subplan.getOutputSymbols(), node.sourceOutputLayout(i), "UNION subplan must provide all of the necessary symbols");
                 subplan.accept(this, context); // visit child
             }
+
+            verifyUniqueId(node);
+
+            return null;
+        }
+
+        @Override
+        public Void visitEnforceSingleRow(EnforceSingleRowNode node, Void context)
+        {
+            node.getSource().accept(this, context); // visit child
 
             verifyUniqueId(node);
 

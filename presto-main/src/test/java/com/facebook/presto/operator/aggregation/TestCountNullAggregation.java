@@ -39,13 +39,13 @@ public class TestCountNullAggregation
     }
 
     @Override
-    public Block getSequenceBlock(int start, int length)
+    public Block[] getSequenceBlocks(int start, int length)
     {
         BlockBuilder blockBuilder = BIGINT.createBlockBuilder(new BlockBuilderStatus(), length);
         for (int i = start; i < start + length; i++) {
             BIGINT.writeLong(blockBuilder, i);
         }
-        return blockBuilder.build();
+        return new Block[] {blockBuilder.build()};
     }
 
     @Override
@@ -82,6 +82,12 @@ public class TestCountNullAggregation
         {
             state.setLong(state.getLong() + scratchState.getLong());
             state.setNull(state.isNull() && scratchState.isNull());
+        }
+
+        @OutputFunction(StandardTypes.BIGINT)
+        public static void output(NullableLongState state, BlockBuilder out)
+        {
+            NullableLongState.write(BIGINT, state, out);
         }
     }
 

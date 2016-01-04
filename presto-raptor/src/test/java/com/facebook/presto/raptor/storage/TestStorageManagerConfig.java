@@ -29,6 +29,9 @@ import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
 import static io.airlift.testing.ValidationAssertions.assertFailsValidation;
 import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static java.lang.Math.max;
+import static java.lang.Runtime.getRuntime;
+import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -39,17 +42,20 @@ public class TestStorageManagerConfig
     {
         assertRecordedDefaults(recordDefaults(StorageManagerConfig.class)
                 .setDataDirectory(null)
-                .setBackupDirectory(null)
                 .setOrcMaxMergeDistance(new DataSize(1, MEGABYTE))
                 .setOrcMaxReadSize(new DataSize(8, MEGABYTE))
                 .setOrcStreamBufferSize(new DataSize(8, MEGABYTE))
+                .setDeletionThreads(max(1, getRuntime().availableProcessors() / 2))
                 .setShardRecoveryTimeout(new Duration(30, SECONDS))
                 .setMissingShardDiscoveryInterval(new Duration(5, MINUTES))
+                .setCompactionInterval(new Duration(1, HOURS))
+                .setShardEjectorInterval(new Duration(4, HOURS))
                 .setRecoveryThreads(10)
+                .setCompactionThreads(5)
+                .setCompactionEnabled(true)
                 .setMaxShardRows(1_000_000)
                 .setMaxShardSize(new DataSize(256, MEGABYTE))
                 .setMaxBufferSize(new DataSize(256, MEGABYTE)));
-
     }
 
     @Test
@@ -57,13 +63,17 @@ public class TestStorageManagerConfig
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
                 .put("storage.data-directory", "/data")
-                .put("storage.backup-directory", "/backup")
                 .put("storage.orc.max-merge-distance", "16kB")
                 .put("storage.orc.max-read-size", "16kB")
                 .put("storage.orc.stream-buffer-size", "16kB")
+                .put("storage.max-deletion-threads", "999")
                 .put("storage.shard-recovery-timeout", "1m")
                 .put("storage.missing-shard-discovery-interval", "4m")
+                .put("storage.compaction-enabled", "false")
+                .put("storage.compaction-interval", "4h")
+                .put("storage.ejector-interval", "9h")
                 .put("storage.max-recovery-threads", "12")
+                .put("storage.max-compaction-threads", "12")
                 .put("storage.max-shard-rows", "10000")
                 .put("storage.max-shard-size", "10MB")
                 .put("storage.max-buffer-size", "512MB")
@@ -71,13 +81,17 @@ public class TestStorageManagerConfig
 
         StorageManagerConfig expected = new StorageManagerConfig()
                 .setDataDirectory(new File("/data"))
-                .setBackupDirectory(new File("/backup"))
                 .setOrcMaxMergeDistance(new DataSize(16, KILOBYTE))
                 .setOrcMaxReadSize(new DataSize(16, KILOBYTE))
                 .setOrcStreamBufferSize(new DataSize(16, KILOBYTE))
+                .setDeletionThreads(999)
                 .setShardRecoveryTimeout(new Duration(1, MINUTES))
                 .setMissingShardDiscoveryInterval(new Duration(4, MINUTES))
+                .setCompactionEnabled(false)
+                .setCompactionInterval(new Duration(4, HOURS))
+                .setShardEjectorInterval(new Duration(9, HOURS))
                 .setRecoveryThreads(12)
+                .setCompactionThreads(12)
                 .setMaxShardRows(10_000)
                 .setMaxShardSize(new DataSize(10, MEGABYTE))
                 .setMaxBufferSize(new DataSize(512, MEGABYTE));

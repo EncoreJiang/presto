@@ -18,13 +18,13 @@ import io.airlift.units.Duration;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class QueryResult
 {
     public enum State
     {
-        INVALID, FAILED, SUCCESS, TOO_MANY_ROWS, TIMEOUT
+        INVALID, FAILED, SUCCESS, TOO_MANY_ROWS, TIMEOUT, FAILED_TO_SETUP, FAILED_TO_TEARDOWN
     }
 
     private final State state;
@@ -34,7 +34,7 @@ public class QueryResult
 
     public QueryResult(State state, Exception exception, Duration duration, List<List<Object>> results)
     {
-        this.state = checkNotNull(state, "state is null");
+        this.state = requireNonNull(state, "state is null");
         this.exception = exception;
         this.duration = duration;
         this.results = (results != null) ? ImmutableList.copyOf(results) : null;

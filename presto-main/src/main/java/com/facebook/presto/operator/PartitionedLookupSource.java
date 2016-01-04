@@ -16,8 +16,8 @@ package com.facebook.presto.operator;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.type.Type;
-import it.unimi.dsi.fastutil.longs.LongIterator;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static it.unimi.dsi.fastutil.HashCommon.murmurHash3;
@@ -29,7 +29,7 @@ public class PartitionedLookupSource
     private final HashGenerator hashGenerator;
     private final int partitionMask;
 
-    public PartitionedLookupSource(List<LookupSource> lookupSources, List<Type> hashChannelTypes)
+    public PartitionedLookupSource(List<? extends LookupSource> lookupSources, List<Type> hashChannelTypes)
     {
         this.lookupSources = lookupSources.toArray(new LookupSource[lookupSources.size()]);
 
@@ -51,9 +51,15 @@ public class PartitionedLookupSource
     }
 
     @Override
+    public int getJoinPositionCount()
+    {
+        throw new UnsupportedOperationException("Parallel hash can not be used in a RIGHT or FULL outer join");
+    }
+
+    @Override
     public long getInMemorySizeInBytes()
     {
-        throw new UnsupportedOperationException();
+        return Arrays.stream(lookupSources).mapToLong(LookupSource::getInMemorySizeInBytes).sum();
     }
 
     @Override
@@ -94,12 +100,6 @@ public class PartitionedLookupSource
         long joinPosition = partitionedJoinPosition >>> lookupSources.length;
         LookupSource lookupSource = lookupSources[partition];
         lookupSource.appendTo(joinPosition, pageBuilder, outputChannelOffset);
-    }
-
-    @Override
-    public LongIterator getUnvisitedJoinPositions()
-    {
-        throw new UnsupportedOperationException();
     }
 
     @Override

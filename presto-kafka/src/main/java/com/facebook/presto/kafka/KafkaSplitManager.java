@@ -16,6 +16,7 @@ package com.facebook.presto.kafka;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPartition;
 import com.facebook.presto.spi.ConnectorPartitionResult;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorSplitManager;
 import com.facebook.presto.spi.ConnectorSplitSource;
@@ -24,9 +25,10 @@ import com.facebook.presto.spi.FixedSplitSource;
 import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.TableNotFoundException;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import io.airlift.log.Logger;
 import kafka.api.PartitionOffsetRequestInfo;
@@ -41,15 +43,15 @@ import kafka.javaapi.TopicMetadataResponse;
 import kafka.javaapi.consumer.SimpleConsumer;
 
 import javax.inject.Inject;
-import javax.inject.Named;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import static com.facebook.presto.kafka.KafkaErrorCode.KAFKA_SPLIT_ERROR;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Kafka specific implementation of {@link ConnectorSplitManager}.
@@ -60,28 +62,31 @@ public class KafkaSplitManager
     private static final Logger log = Logger.get(KafkaSplitManager.class);
 
     private final String connectorId;
-    private final KafkaConnectorConfig kafkaConnectorConfig;
     private final KafkaHandleResolver handleResolver;
     private final KafkaSimpleConsumerManager consumerManager;
+    private final Set<HostAddress> nodes;
 
     @Inject
-    public KafkaSplitManager(@Named("connectorId") String connectorId,
+    public KafkaSplitManager(
+            KafkaConnectorId connectorId,
             KafkaConnectorConfig kafkaConnectorConfig,
             KafkaHandleResolver handleResolver,
             KafkaSimpleConsumerManager consumerManager)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null");
-        this.kafkaConnectorConfig = checkNotNull(kafkaConnectorConfig, "kafkaConfig is null");
-        this.handleResolver = checkNotNull(handleResolver, "handleResolver is null");
-        this.consumerManager = checkNotNull(consumerManager, "consumerManager is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
+        this.handleResolver = requireNonNull(handleResolver, "handleResolver is null");
+        this.consumerManager = requireNonNull(consumerManager, "consumerManager is null");
+
+        requireNonNull(kafkaConnectorConfig, "kafkaConfig is null");
+        this.nodes = ImmutableSet.copyOf(kafkaConnectorConfig.getNodes());
     }
 
     @Override
-    public ConnectorPartitionResult getPartitions(ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> tupleDomain)
+    public ConnectorPartitionResult getPartitions(ConnectorSession session, ConnectorTableHandle tableHandle, TupleDomain<ColumnHandle> tupleDomain)
     {
         KafkaTableHandle kafkaTableHandle = handleResolver.convertTableHandle(tableHandle);
 
-        List<HostAddress> nodes = new ArrayList<>(kafkaConnectorConfig.getNodes());
+        List<HostAddress> nodes = new ArrayList<>(this.nodes);
         Collections.shuffle(nodes);
 
         SimpleConsumer simpleConsumer = consumerManager.getConsumer(nodes.get(0));
@@ -116,7 +121,7 @@ public class KafkaSplitManager
     }
 
     @Override
-    public ConnectorSplitSource getPartitionSplits(ConnectorTableHandle tableHandle, List<ConnectorPartition> partitions)
+    public ConnectorSplitSource getPartitionSplits(ConnectorSession session, ConnectorTableHandle tableHandle, List<ConnectorPartition> partitions)
     {
         KafkaTableHandle kafkaTableHandle = handleResolver.convertTableHandle(tableHandle);
 

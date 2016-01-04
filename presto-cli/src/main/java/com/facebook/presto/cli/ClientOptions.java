@@ -17,8 +17,11 @@ import com.facebook.presto.client.ClientSession;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
-import io.airlift.command.Option;
+import io.airlift.airline.Option;
+import io.airlift.http.client.spnego.KerberosConfig;
+import io.airlift.units.Duration;
 
+import java.io.File;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.CharsetEncoder;
@@ -31,14 +34,39 @@ import java.util.Optional;
 import java.util.TimeZone;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.nio.charset.StandardCharsets.US_ASCII;
 import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class ClientOptions
 {
     @Option(name = "--server", title = "server", description = "Presto server location (default: localhost:8080)")
     public String server = "localhost:8080";
+
+    @Option(name = "--enable-authentication", title = "enable authentication", description = "Enable client authentication")
+    public boolean authenticationEnabled;
+
+    @Option(name = "--krb5-remote-service-name", title = "krb5 remote service name", description = "Remote peer's kerberos service name")
+    public String krb5RemoteServiceName;
+
+    @Option(name = "--krb5-config-path", title = "krb5 config path", description = "Kerberos config file path (default: /etc/krb5.conf)")
+    public String krb5ConfigPath = "/etc/krb5.conf";
+
+    @Option(name = "--krb5-keytab-path", title = "krb5 keytab path", description = "Kerberos key table path")
+    public String krb5KeytabPath = "/etc/krb5.keytab";
+
+    @Option(name = "--krb5-credential-cache-path", title = "krb5 credential cache path", description = "Kerberos credential cache path")
+    public String krb5CredentialCachePath = defaultCredentialCachePath();
+
+    @Option(name = "--krb5-principal", title = "krb5 principal", description = "Kerberos principal to be used")
+    public String krb5Principal;
+
+    @Option(name = "--keystore-path", title = "keystore path", description = "Keystore path")
+    public String keystorePath;
+
+    @Option(name = "--keystore-password", title = "keystore password", description = "Keystore password")
+    public String keystorePassword;
 
     @Option(name = "--user", title = "user", description = "Username")
     public String user = System.getProperty("user.name");
@@ -47,16 +75,19 @@ public class ClientOptions
     public String source = "presto-cli";
 
     @Option(name = "--catalog", title = "catalog", description = "Default catalog")
-    public String catalog = "default";
+    public String catalog;
 
     @Option(name = "--schema", title = "schema", description = "Default schema")
-    public String schema = "default";
+    public String schema;
 
     @Option(name = {"-f", "--file"}, title = "file", description = "Execute statements from file and exit")
     public String file;
 
     @Option(name = "--debug", title = "debug", description = "Enable debug information")
     public boolean debug;
+
+    @Option(name = "--log-levels-file", title = "log levels", description = "Configure log levels for debugging")
+    public String logLevelsFile;
 
     @Option(name = "--execute", title = "execute", description = "Execute specified statements and exit")
     public String execute;
@@ -69,6 +100,9 @@ public class ClientOptions
 
     @Option(name = "--socks-proxy", title = "socks-proxy", description = "SOCKS proxy to use for server connections")
     public HostAndPort socksProxy;
+
+    @Option(name = "--client-request-timeout", title = "client request timeout", description = "Client request timeout (default: 2m)")
+    public Duration clientRequestTimeout = new Duration(2, MINUTES);
 
     public enum OutputFormat
     {
@@ -92,7 +126,25 @@ public class ClientOptions
                 TimeZone.getDefault().getID(),
                 Locale.getDefault(),
                 toProperties(sessionProperties),
-                debug);
+                null,
+                debug,
+                clientRequestTimeout);
+    }
+
+    public KerberosConfig toKerberosConfig()
+    {
+        KerberosConfig config = new KerberosConfig();
+        if (krb5ConfigPath != null) {
+            config.setConfig(new File(krb5ConfigPath));
+        }
+        if (krb5KeytabPath != null) {
+            config.setKeytab(new File(krb5KeytabPath));
+        }
+        if (krb5CredentialCachePath != null) {
+            config.setCredentialCache(new File(krb5CredentialCachePath));
+        }
+
+        return config;
     }
 
     public static URI parseServer(String server)
@@ -122,6 +174,15 @@ public class ClientOptions
             builder.put(name, sessionProperty.getValue());
         }
         return builder.build();
+    }
+
+    private static String defaultCredentialCachePath()
+    {
+        String value = System.getenv("KRB5CCNAME");
+        if (value != null && value.startsWith("FILE:")) {
+            return value.substring("FILE:".length());
+        }
+        return value;
     }
 
     public static final class ClientSessionProperty
@@ -154,9 +215,9 @@ public class ClientOptions
 
         public ClientSessionProperty(Optional<String> catalog, String name, String value)
         {
-            this.catalog = checkNotNull(catalog, "catalog is null");
-            this.name = checkNotNull(name, "name is null");
-            this.value = checkNotNull(value, "value is null");
+            this.catalog = requireNonNull(catalog, "catalog is null");
+            this.name = requireNonNull(name, "name is null");
+            this.value = requireNonNull(value, "value is null");
 
             verifyProperty(catalog, name, value);
         }

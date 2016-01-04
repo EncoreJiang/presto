@@ -134,6 +134,12 @@ var Query = React.createClass({
         if (state === "FAILED") {
             state = this.shortErrorType(query.errorType, query.errorCode);
         }
+        if (query.fullyBlocked && state == "RUNNING") {
+            state = "BLOCKED";
+            if (query.blockedReasons.length > 0) {
+                state += " (" + query.blockedReasons.join() + ")";
+            }
+        }
         var splits;
         if (query.state == 'FINISHED' || query.state == 'FAILED') {
             splits = <div className="row">
@@ -155,6 +161,10 @@ var Query = React.createClass({
                 </div>
             </div>;
         }
+        var authenticatedIcon = "";
+        if (query.session.principal) {
+            authenticatedIcon = <span className="glyphicon glyphicon-lock"></span>;
+        }
         var queryText = query.query;
         if (queryText.length > 200) {
             queryText = queryText.substring(0, 200) + "...";
@@ -166,7 +176,9 @@ var Query = React.createClass({
                             <div className="col-md-12"><a href={"query.html?" + query.queryId}>{query.queryId}</a></div>
                         </div>
                         <div className="row">
-                            <div className="col-md-12 truncate">{query.session.user}</div>
+                            <div className="col-md-12 truncate">
+                                <span>{query.session.user} {authenticatedIcon}</span>
+                            </div>
                         </div>
                         <div className="row">
                             <div className="col-md-12 truncate">{query.session.source}</div>
@@ -204,19 +216,17 @@ var QueryList = React.createClass({
 });
 
 var QueryPane = React.createClass({
-    loadQueriesFromServer: function(finishCallback)
-    {
-        d3.json('/v1/query', function (queries) {
-            this.setState({queries: queries, initialized: true});
-            finishCallback();
-        }.bind(this));
-    },
     getInitialState: function() {
         return {queries: [], autoRefresh: true, initialized: false};
     },
     refreshLoop: function() {
-        clearTimeout(this.timeoutId);
-        this.loadQueriesFromServer(function () {
+        clearTimeout(this.timeoutId); // to stop multiple series of refreshLoop from going on simultaneously
+        d3.json('/v1/query', function (queries) {
+            if (!this.state.autoRefresh) { // to stop refreshing when user turns off auto-refresh at the same time json was being fetched
+                return;
+            }
+            this.setState({queries: queries, initialized: true});
+            clearTimeout(this.timeoutId); // to stop multiple series of refreshLoop from going on simultaneously
             this.timeoutId = setTimeout(this.refreshLoop, 1000);
         }.bind(this));
     },
@@ -243,7 +253,7 @@ var QueryPane = React.createClass({
         this.setState({autoRefresh: event.target.checked});
     },
     render: function() {
-        if (this.state.queries.length > 0) {
+        if (this.state.queries !== null && this.state.queries.length > 0) {
             var runningQueries = [];
             var doneQueries = [];
             runningQueries = this.state.queries.filter(function (query) {

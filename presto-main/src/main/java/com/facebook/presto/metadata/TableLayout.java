@@ -16,13 +16,14 @@ package com.facebook.presto.metadata;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorTableLayout;
 import com.facebook.presto.spi.LocalProperty;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.transaction.TransactionHandle;
 
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class TableLayout
 {
@@ -31,8 +32,8 @@ public class TableLayout
 
     public TableLayout(TableLayoutHandle handle, ConnectorTableLayout layout)
     {
-        checkNotNull(handle, "handle is null");
-        checkNotNull(layout, "layout is null");
+        requireNonNull(handle, "handle is null");
+        requireNonNull(layout, "layout is null");
 
         this.handle = handle;
         this.layout = layout;
@@ -68,8 +69,8 @@ public class TableLayout
         return layout.getDiscretePredicates();
     }
 
-    public static TableLayout fromConnectorLayout(String connectorId, ConnectorTableLayout layout)
+    public static TableLayout fromConnectorLayout(String connectorId, TransactionHandle transactionHandle, ConnectorTableLayout layout)
     {
-        return new TableLayout(new TableLayoutHandle(connectorId, layout.getHandle()), layout);
+        return new TableLayout(new TableLayoutHandle(connectorId, transactionHandle, layout.getHandle()), layout);
     }
 }

@@ -13,40 +13,31 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 import java.util.Map;
 
 import static com.facebook.presto.metadata.Signature.typeParameter;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
 
 public class MapKeys
-        extends ParametricScalar
+        extends SqlScalarFunction
 {
     public static final MapKeys MAP_KEYS = new MapKeys();
-    private static final Signature SIGNATURE = new Signature("map_keys", ImmutableList.of(typeParameter("K"), typeParameter("V")), "array<K>", ImmutableList.of("map<K,V>"), false, false);
-    private static final MethodHandle METHOD_HANDLE = methodHandle(MapKeys.class, "getKeys", Type.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(MapKeys.class, "getKeys", Type.class, Block.class);
 
-    @Override
-    public Signature getSignature()
+    public MapKeys()
     {
-        return SIGNATURE;
+        super("map_keys", ImmutableList.of(typeParameter("K"), typeParameter("V")), "array<K>", ImmutableList.of("map<K,V>"));
     }
 
     @Override
@@ -68,25 +59,20 @@ public class MapKeys
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
         checkArgument(arity == 1, "map_keys expects only one argument");
         Type keyType = types.get("K");
-        Type valueType = types.get("V");
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(keyType);
-        Signature signature = new Signature("map_keys",
-                parameterizedTypeName("array", keyType.getTypeSignature()),
-                parameterizedTypeName("map", keyType.getTypeSignature(), valueType.getTypeSignature()));
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), true, ImmutableList.of(false));
+        return new ScalarFunctionImplementation(true, ImmutableList.of(false), methodHandle, isDeterministic());
     }
 
-    public static Slice getKeys(Type keyType, Slice map)
+    public static Block getKeys(Type keyType, Block block)
     {
-        Block block = readStructuralBlock(map);
-        BlockBuilder blockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), block.getSizeInBytes());
+        BlockBuilder blockBuilder = keyType.createBlockBuilder(new BlockBuilderStatus(), block.getPositionCount() / 2);
         for (int i = 0; i < block.getPositionCount(); i += 2) {
             keyType.appendTo(block, i, blockBuilder);
         }
-        return buildStructuralSlice(blockBuilder);
+        return blockBuilder.build();
     }
 }

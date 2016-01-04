@@ -14,7 +14,6 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.block.BlockAssertions;
-import com.facebook.presto.block.BlockUtils;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.MetadataManager;
 import com.facebook.presto.spi.block.Block;
@@ -35,6 +34,7 @@ import static com.facebook.presto.operator.scalar.FunctionAssertions.createExpre
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.TypeUtils.writeNativeValue;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static org.testng.Assert.assertEquals;
 
@@ -194,7 +194,7 @@ public class TestInterpretedProjectionFunction
     private static Block createBlock(Type type, Object value)
     {
         BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1);
-        BlockUtils.appendObject(type, blockBuilder, value);
+        writeNativeValue(type, blockBuilder, value);
         return blockBuilder.build();
     }
 }

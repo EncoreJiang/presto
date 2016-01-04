@@ -54,6 +54,23 @@ public interface BlockBuilder
     BlockBuilder writeBytes(Slice source, int sourceIndex, int length);
 
     /**
+     * Write an object to the current entry;
+     */
+    default BlockBuilder writeObject(Object value)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
+     * Return a writer to the current entry. The caller can operate on the returned caller to incrementally build the object. This is generally more efficient than
+     * building the object elsewhere and call writeObject afterwards because a large chunk of memory could potentially be unnecessarily copied in this process.
+     */
+    default BlockBuilder beginBlockEntry()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    /**
      * Write a byte to the current entry;
      */
     BlockBuilder closeEntry();
@@ -67,14 +84,4 @@ public interface BlockBuilder
      * Builds the block. This method can be called multiple times.
      */
     Block build();
-
-    /**
-     * Have any values been added to the block?
-     */
-    boolean isEmpty();
-
-    /**
-     * Is this block full? If true no more values should be added to the block.
-     */
-    boolean isFull();
 }

@@ -16,25 +16,26 @@ package com.facebook.presto.operator.aggregation;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.type.BigintType;
+import com.facebook.presto.type.ArrayType;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.type.ArrayType.toStackRepresentation;
+import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.util.StructuralTestUtil.arrayBlockOf;
 
 public class TestArrayMinAggregation
         extends AbstractTestAggregationFunction
 {
     @Override
-    public Block getSequenceBlock(int start, int length)
+    public Block[] getSequenceBlocks(int start, int length)
     {
-        BlockBuilder blockBuilder = VARBINARY.createBlockBuilder(new BlockBuilderStatus(), length);
+        ArrayType arrayType = new ArrayType(BIGINT);
+        BlockBuilder blockBuilder = arrayType.createBlockBuilder(new BlockBuilderStatus(), length);
         for (int i = start; i < start + length; i++) {
-            VARBINARY.writeSlice(blockBuilder, toStackRepresentation(ImmutableList.of(i), BigintType.BIGINT));
+            arrayType.writeObject(blockBuilder, arrayBlockOf(BIGINT, i));
         }
-        return blockBuilder.build();
+        return new Block[] {blockBuilder.build()};
     }
 
     @Override

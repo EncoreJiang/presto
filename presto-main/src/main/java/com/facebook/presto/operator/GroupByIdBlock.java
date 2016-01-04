@@ -17,20 +17,25 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockEncoding;
 import io.airlift.slice.Slice;
+import org.openjdk.jol.info.ClassLayout;
+
+import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class GroupByIdBlock
         implements Block
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(GroupByIdBlock.class).instanceSize();
+
     private final long groupCount;
     private final Block block;
 
     public GroupByIdBlock(long groupCount, Block block)
     {
-        checkNotNull(block, "block is null");
+        requireNonNull(block, "block is null");
         this.groupCount = groupCount;
         this.block = block;
     }
@@ -49,6 +54,12 @@ public class GroupByIdBlock
     public Block getRegion(int positionOffset, int length)
     {
         return block.getRegion(positionOffset, length);
+    }
+
+    @Override
+    public Block copyRegion(int positionOffset, int length)
+    {
+        return block.copyRegion(positionOffset, length);
     }
 
     @Override
@@ -100,6 +111,12 @@ public class GroupByIdBlock
     }
 
     @Override
+    public <T> T getObject(int position, Class<T> clazz)
+    {
+        return block.getObject(position, clazz);
+    }
+
+    @Override
     public boolean bytesEqual(int position, int offset, Slice otherSlice, int otherOffset, int length)
     {
         return block.bytesEqual(position, offset, otherSlice, otherOffset, length);
@@ -115,6 +132,12 @@ public class GroupByIdBlock
     public void writeBytesTo(int position, int offset, int length, BlockBuilder blockBuilder)
     {
         block.writeBytesTo(position, offset, length, blockBuilder);
+    }
+
+    @Override
+    public void writePositionTo(int position, BlockBuilder blockBuilder)
+    {
+        block.writePositionTo(position, blockBuilder);
     }
 
     @Override
@@ -160,9 +183,21 @@ public class GroupByIdBlock
     }
 
     @Override
+    public int getRetainedSizeInBytes()
+    {
+        return INSTANCE_SIZE + block.getRetainedSizeInBytes();
+    }
+
+    @Override
     public BlockEncoding getEncoding()
     {
         return block.getEncoding();
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        return block.copyPositions(positions);
     }
 
     @Override

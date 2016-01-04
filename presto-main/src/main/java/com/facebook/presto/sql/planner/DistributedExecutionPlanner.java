@@ -13,16 +13,20 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.split.SampledSplitSource;
 import com.facebook.presto.split.SplitManager;
 import com.facebook.presto.split.SplitSource;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.DeleteNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
+import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
+import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.PlanVisitor;
@@ -32,7 +36,7 @@ import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
@@ -47,7 +51,7 @@ import javax.inject.Inject;
 
 import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class DistributedExecutionPlanner
 {
@@ -56,37 +60,44 @@ public class DistributedExecutionPlanner
     @Inject
     public DistributedExecutionPlanner(SplitManager splitManager)
     {
-        this.splitManager = checkNotNull(splitManager, "splitManager is null");
+        this.splitManager = requireNonNull(splitManager, "splitManager is null");
     }
 
-    public StageExecutionPlan plan(SubPlan root)
+    public StageExecutionPlan plan(SubPlan root, Session session)
     {
         PlanFragment currentFragment = root.getFragment();
 
         // get splits for this fragment, this is lazy so split assignments aren't actually calculated here
-        Visitor visitor = new Visitor();
+        Visitor visitor = new Visitor(session);
         Optional<SplitSource> splits = currentFragment.getRoot().accept(visitor, null);
 
         // create child stages
         ImmutableList.Builder<StageExecutionPlan> dependencies = ImmutableList.builder();
         for (SubPlan childPlan : root.getChildren()) {
-            dependencies.add(plan(childPlan));
+            dependencies.add(plan(childPlan, session));
         }
 
-        return new StageExecutionPlan(currentFragment,
+        return new StageExecutionPlan(
+                currentFragment,
                 splits,
-                dependencies.build()
-        );
+                dependencies.build());
     }
 
     private final class Visitor
             extends PlanVisitor<Void, Optional<SplitSource>>
     {
+        private final Session session;
+
+        private Visitor(Session session)
+        {
+            this.session = session;
+        }
+
         @Override
         public Optional<SplitSource> visitTableScan(TableScanNode node, Void context)
         {
             // get dataSource for table
-            SplitSource splitSource = splitManager.getSplits(node.getLayout().get());
+            SplitSource splitSource = splitManager.getSplits(session, node.getLayout().get());
 
             return Optional.of(splitSource);
         }
@@ -216,6 +227,12 @@ public class DistributedExecutionPlanner
         }
 
         @Override
+        public Optional<SplitSource> visitEnforceSingleRow(EnforceSingleRowNode node, Void context)
+        {
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
         public Optional<SplitSource> visitLimit(LimitNode node, Void context)
         {
             return node.getSource().accept(this, context);
@@ -240,9 +257,22 @@ public class DistributedExecutionPlanner
         }
 
         @Override
-        public Optional<SplitSource> visitTableCommit(TableCommitNode node, Void context)
+        public Optional<SplitSource> visitTableFinish(TableFinishNode node, Void context)
         {
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Optional<SplitSource> visitDelete(DeleteNode node, Void context)
+        {
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Optional<SplitSource> visitMetadataDelete(MetadataDeleteNode node, Void context)
+        {
+            // MetadataDelete node does not have splits
+            return Optional.empty();
         }
 
         @Override

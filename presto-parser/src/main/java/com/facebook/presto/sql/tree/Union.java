@@ -13,13 +13,14 @@
  */
 package com.facebook.presto.sql.tree;
 
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static java.util.Objects.requireNonNull;
 
 public class Union
         extends SetOperation
@@ -29,7 +30,18 @@ public class Union
 
     public Union(List<Relation> relations, boolean distinct)
     {
-        Preconditions.checkNotNull(relations, "relations is null");
+        this(Optional.empty(), relations, distinct);
+    }
+
+    public Union(NodeLocation location, List<Relation> relations, boolean distinct)
+    {
+        this(Optional.of(location), relations, distinct);
+    }
+
+    private Union(Optional<NodeLocation> location, List<Relation> relations, boolean distinct)
+    {
+        super(location);
+        requireNonNull(relations, "relations is null");
 
         this.relations = ImmutableList.copyOf(relations);
         this.distinct = distinct;

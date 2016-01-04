@@ -13,14 +13,16 @@
  */
 package com.facebook.presto.server;
 
-import com.facebook.presto.Session;
+import com.facebook.presto.SessionRepresentation;
 import com.facebook.presto.execution.QueryId;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryState;
+import com.facebook.presto.operator.BlockedReason;
 import com.facebook.presto.spi.ErrorCode;
 import com.facebook.presto.spi.StandardErrorCode.ErrorType;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableSet;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
 
@@ -28,20 +30,23 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 import java.net.URI;
+import java.util.Set;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class BasicQueryInfo
 {
     private final QueryId queryId;
-    private final Session session;
+    private final SessionRepresentation session;
     private final QueryState state;
     private final ErrorType errorType;
     private final ErrorCode errorCode;
     private final boolean scheduled;
+    private final boolean fullyBlocked;
+    private final Set<BlockedReason> blockedReasons;
     private final URI self;
     private final String query;
     private final Duration elapsedTime;
@@ -55,11 +60,13 @@ public class BasicQueryInfo
     @JsonCreator
     public BasicQueryInfo(
             @JsonProperty("queryId") QueryId queryId,
-            @JsonProperty("session") Session session,
+            @JsonProperty("session") SessionRepresentation session,
             @JsonProperty("state") QueryState state,
             @JsonProperty("errorType") ErrorType errorType,
             @JsonProperty("errorCode") ErrorCode errorCode,
             @JsonProperty("scheduled") boolean scheduled,
+            @JsonProperty("fullyBlocked") boolean fullyBlocked,
+            @JsonProperty("blockedReasons") Set<BlockedReason> blockedReasons,
             @JsonProperty("self") URI self,
             @JsonProperty("query") String query,
             @JsonProperty("elapsedTime") Duration elapsedTime,
@@ -71,14 +78,16 @@ public class BasicQueryInfo
             @JsonProperty("totalDrivers") int totalDrivers)
 
     {
-        this.queryId = checkNotNull(queryId, "queryId is null");
-        this.session = checkNotNull(session, "session is null");
-        this.state = checkNotNull(state, "state is null");
+        this.queryId = requireNonNull(queryId, "queryId is null");
+        this.session = requireNonNull(session, "session is null");
+        this.state = requireNonNull(state, "state is null");
         this.errorType = errorType;
         this.errorCode = errorCode;
         this.scheduled = scheduled;
-        this.self = checkNotNull(self, "self is null");
-        this.query = checkNotNull(query, "query is null");
+        this.fullyBlocked = fullyBlocked;
+        this.blockedReasons = ImmutableSet.copyOf(requireNonNull(blockedReasons, "blockedReasons is null"));
+        this.self = requireNonNull(self, "self is null");
+        this.query = requireNonNull(query, "query is null");
         this.elapsedTime = elapsedTime;
         this.endTime = endTime;
         this.createTime = createTime;
@@ -101,6 +110,8 @@ public class BasicQueryInfo
                 queryInfo.getErrorType(),
                 queryInfo.getErrorCode(),
                 queryInfo.isScheduled(),
+                queryInfo.getQueryStats().isFullyBlocked(),
+                queryInfo.getQueryStats().getBlockedReasons(),
                 queryInfo.getSelf(),
                 queryInfo.getQuery(),
                 queryInfo.getQueryStats().getElapsedTime(),
@@ -119,7 +130,7 @@ public class BasicQueryInfo
     }
 
     @JsonProperty
-    public Session getSession()
+    public SessionRepresentation getSession()
     {
         return session;
     }
@@ -148,6 +159,18 @@ public class BasicQueryInfo
     public boolean isScheduled()
     {
         return scheduled;
+    }
+
+    @JsonProperty
+    public boolean isFullyBlocked()
+    {
+        return fullyBlocked;
+    }
+
+    @JsonProperty
+    public Set<BlockedReason> getBlockedReasons()
+    {
+        return blockedReasons;
     }
 
     @JsonProperty

@@ -13,11 +13,11 @@
  */
 package com.facebook.presto.sql.tree;
 
-import com.google.common.base.Preconditions;
-
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static java.util.Objects.requireNonNull;
 
 public class Except
         extends SetOperation
@@ -28,8 +28,19 @@ public class Except
 
     public Except(Relation left, Relation right, boolean distinct)
     {
-        Preconditions.checkNotNull(left, "left is null");
-        Preconditions.checkNotNull(right, "right is null");
+        this(Optional.empty(), left, right, distinct);
+    }
+
+    public Except(NodeLocation location, Relation left, Relation right, boolean distinct)
+    {
+        this(Optional.of(location), left, right, distinct);
+    }
+
+    private Except(Optional<NodeLocation> location, Relation left, Relation right, boolean distinct)
+    {
+        super(location);
+        requireNonNull(left, "left is null");
+        requireNonNull(right, "right is null");
 
         this.left = left;
         this.right = right;

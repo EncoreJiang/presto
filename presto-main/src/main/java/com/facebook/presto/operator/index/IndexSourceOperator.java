@@ -25,19 +25,19 @@ import com.facebook.presto.spi.ConnectorIndex;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.RecordPageSource;
 import com.facebook.presto.spi.RecordSet;
+import com.facebook.presto.spi.UpdatablePageSource;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
-import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 
-import javax.annotation.concurrent.GuardedBy;
-
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static com.facebook.presto.util.Types.checkType;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class IndexSourceOperator
         implements SourceOperator
@@ -60,10 +60,10 @@ public class IndexSourceOperator
                 Function<RecordSet, RecordSet> probeKeyNormalizer)
         {
             this.operatorId = operatorId;
-            this.sourceId = checkNotNull(sourceId, "sourceId is null");
-            this.index = checkNotNull(index, "index is null");
-            this.types = checkNotNull(types, "types is null");
-            this.probeKeyNormalizer = checkNotNull(probeKeyNormalizer, "probeKeyNormalizer is null");
+            this.sourceId = requireNonNull(sourceId, "sourceId is null");
+            this.index = requireNonNull(index, "index is null");
+            this.types = requireNonNull(types, "types is null");
+            this.probeKeyNormalizer = requireNonNull(probeKeyNormalizer, "probeKeyNormalizer is null");
         }
 
         @Override
@@ -104,7 +104,6 @@ public class IndexSourceOperator
     private final List<Type> types;
     private final Function<RecordSet, RecordSet> probeKeyNormalizer;
 
-    @GuardedBy("this")
     private Operator source;
 
     public IndexSourceOperator(
@@ -114,11 +113,11 @@ public class IndexSourceOperator
             List<Type> types,
             Function<RecordSet, RecordSet> probeKeyNormalizer)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
-        this.planNodeId = checkNotNull(planNodeId, "planNodeId is null");
-        this.index = checkNotNull(index, "index is null");
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
-        this.probeKeyNormalizer = checkNotNull(probeKeyNormalizer, "probeKeyNormalizer is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
+        this.index = requireNonNull(index, "index is null");
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
+        this.probeKeyNormalizer = requireNonNull(probeKeyNormalizer, "probeKeyNormalizer is null");
     }
 
     @Override
@@ -134,11 +133,11 @@ public class IndexSourceOperator
     }
 
     @Override
-    public synchronized void addSplit(Split split)
+    public Supplier<Optional<UpdatablePageSource>> addSplit(Split split)
     {
-        checkNotNull(split, "split is null");
+        requireNonNull(split, "split is null");
         checkType(split.getConnectorSplit(), IndexSplit.class, "connectorSplit");
-        checkState(getSource() == null, "Index source split already set");
+        checkState(source == null, "Index source split already set");
 
         IndexSplit indexSplit = (IndexSplit) split.getConnectorSplit();
 
@@ -147,20 +146,17 @@ public class IndexSourceOperator
         RecordSet result = index.lookup(normalizedRecordSet);
         source = new PageSourceOperator(new RecordPageSource(result), result.getColumnTypes(), operatorContext);
 
-        operatorContext.setInfoSupplier(Suppliers.ofInstance(split.getInfo()));
+        operatorContext.setInfoSupplier(split::getInfo);
+
+        return Optional::empty;
     }
 
     @Override
-    public synchronized void noMoreSplits()
+    public void noMoreSplits()
     {
         if (source == null) {
             source = new FinishedOperator(operatorContext, types);
         }
-    }
-
-    private synchronized Operator getSource()
-    {
-        return source;
     }
 
     @Override
@@ -172,22 +168,14 @@ public class IndexSourceOperator
     @Override
     public void finish()
     {
-        Operator delegate;
-        synchronized (this) {
-            delegate = getSource();
-            if (delegate == null) {
-                source = new FinishedOperator(operatorContext, types);
-                return;
-            }
-        }
-        delegate.finish();
+        noMoreSplits();
+        source.finish();
     }
 
     @Override
     public boolean isFinished()
     {
-        Operator delegate = getSource();
-        return delegate != null && delegate.isFinished();
+        return (source != null) && source.isFinished();
     }
 
     @Override
@@ -205,10 +193,18 @@ public class IndexSourceOperator
     @Override
     public Page getOutput()
     {
-        Operator delegate = getSource();
-        if (delegate == null) {
+        if (source == null) {
             return null;
         }
-        return delegate.getOutput();
+        return source.getOutput();
+    }
+
+    @Override
+    public void close()
+            throws Exception
+    {
+        if (source != null) {
+            source.close();
+        }
     }
 }

@@ -15,47 +15,67 @@ package com.facebook.presto.raptor;
 
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.HostAddress;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
+import java.util.OptionalLong;
 import java.util.UUID;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class RaptorSplit
         implements ConnectorSplit
 {
+    private final String connectorId;
     private final UUID shardUuid;
     private final List<HostAddress> addresses;
     private final TupleDomain<RaptorColumnHandle> effectivePredicate;
+    private final OptionalLong transactionId;
 
     @JsonCreator
     public RaptorSplit(
+            @JsonProperty("connectorId") String connectorId,
             @JsonProperty("shardUuid") UUID shardUuid,
-            @JsonProperty("addresses") List<HostAddress> addresses,
-            @JsonProperty("effectivePredicate") TupleDomain<RaptorColumnHandle> effectivePredicate)
+            @JsonProperty("effectivePredicate") TupleDomain<RaptorColumnHandle> effectivePredicate,
+            @JsonProperty("transactionId") OptionalLong transactionId)
     {
-        this.shardUuid = checkNotNull(shardUuid, "shardUuid is null");
-        this.addresses = ImmutableList.copyOf(checkNotNull(addresses, "addresses is null"));
-        this.effectivePredicate = checkNotNull(effectivePredicate, "effectivePredicate is null");
+        this(connectorId, shardUuid, ImmutableList.of(), effectivePredicate, transactionId);
+    }
+
+    public RaptorSplit(
+            String connectorId,
+            UUID shardUuid,
+            List<HostAddress> addresses,
+            TupleDomain<RaptorColumnHandle> effectivePredicate,
+            OptionalLong transactionId)
+    {
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+        this.shardUuid = requireNonNull(shardUuid, "shardUuid is null");
+        this.addresses = ImmutableList.copyOf(requireNonNull(addresses, "addresses is null"));
+        this.effectivePredicate = requireNonNull(effectivePredicate, "effectivePredicate is null");
+        this.transactionId = requireNonNull(transactionId, "transactionId is null");
     }
 
     @Override
-    @JsonProperty
     public boolean isRemotelyAccessible()
     {
         return false;
     }
 
     @Override
-    @JsonProperty
     public List<HostAddress> getAddresses()
     {
         return addresses;
+    }
+
+    @JsonProperty
+    public String getConnectorId()
+    {
+        return connectorId;
     }
 
     @JsonProperty
@@ -68,6 +88,12 @@ public class RaptorSplit
     public TupleDomain<RaptorColumnHandle> getEffectivePredicate()
     {
         return effectivePredicate;
+    }
+
+    @JsonProperty
+    public OptionalLong getTransactionId()
+    {
+        return transactionId;
     }
 
     @Override

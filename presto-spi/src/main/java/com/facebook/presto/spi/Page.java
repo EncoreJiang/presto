@@ -25,6 +25,7 @@ public class Page
     private final Block[] blocks;
     private final int positionCount;
     private final AtomicLong sizeInBytes = new AtomicLong(-1);
+    private final AtomicLong retainedSizeInBytes = new AtomicLong(-1);
 
     public Page(Block... blocks)
     {
@@ -61,6 +62,19 @@ public class Page
         return sizeInBytes;
     }
 
+    public long getRetainedSizeInBytes()
+    {
+        long retainedSizeInBytes = this.retainedSizeInBytes.get();
+        if (retainedSizeInBytes < 0) {
+            retainedSizeInBytes = 0;
+            for (Block block : blocks) {
+                retainedSizeInBytes += block.getRetainedSizeInBytes();
+            }
+            this.retainedSizeInBytes.set(retainedSizeInBytes);
+        }
+        return retainedSizeInBytes;
+    }
+
     public Block[] getBlocks()
     {
         return blocks.clone();
@@ -83,6 +97,28 @@ public class Page
             slicedBlocks[i] = blocks[i].getRegion(positionOffset, length);
         }
         return new Page(length, slicedBlocks);
+    }
+
+    public void compact()
+    {
+        if (getRetainedSizeInBytes() <= getSizeInBytes()) {
+            return;
+        }
+
+        for (int i = 0; i < blocks.length; i++) {
+            Block block = blocks[i];
+            if (block.getSizeInBytes() < block.getRetainedSizeInBytes()) {
+                // Copy the block to compact its size
+                Block compactedBlock = block.copyRegion(0, block.getPositionCount());
+                blocks[i] = compactedBlock;
+            }
+        }
+
+        long retainedSize = 0;
+        for (Block block : blocks) {
+            retainedSize += block.getRetainedSizeInBytes();
+        }
+        retainedSizeInBytes.set(retainedSize);
     }
 
     /**

@@ -18,22 +18,22 @@ import com.facebook.presto.spi.type.Type;
 import java.util.Map;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class SpecializedFunctionKey
 {
-    private final ParametricFunction function;
+    private final SqlFunction function;
     private final Map<String, Type> boundTypeParameters;
     private final int arity;
 
-    public SpecializedFunctionKey(ParametricFunction function, Map<String, Type> boundTypeParameters, int arity)
+    public SpecializedFunctionKey(SqlFunction function, Map<String, Type> boundTypeParameters, int arity)
     {
-        this.function = checkNotNull(function, "function is null");
-        this.boundTypeParameters = checkNotNull(boundTypeParameters, "boundTypeParameters is null");
+        this.function = requireNonNull(function, "function is null");
+        this.boundTypeParameters = requireNonNull(boundTypeParameters, "boundTypeParameters is null");
         this.arity = arity;
     }
 
-    public ParametricFunction getFunction()
+    public SqlFunction getFunction()
     {
         return function;
     }

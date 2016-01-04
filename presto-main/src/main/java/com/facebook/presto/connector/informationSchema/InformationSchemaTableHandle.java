@@ -13,7 +13,6 @@
  */
 package com.facebook.presto.connector.informationSchema;
 
-import com.facebook.presto.Session;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.SchemaTableName;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -21,33 +20,33 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class InformationSchemaTableHandle
         implements ConnectorTableHandle
 {
-    private final Session session;
+    private final String connectorId;
     private final String catalogName;
     private final String schemaName;
     private final String tableName;
 
     @JsonCreator
     public InformationSchemaTableHandle(
-            @JsonProperty("session") Session session,
+            @JsonProperty("connectorId") String connectorId,
             @JsonProperty("catalogName") String catalogName,
             @JsonProperty("schemaName") String schemaName,
             @JsonProperty("tableName") String tableName)
     {
-        this.session = session;
-        this.catalogName = checkNotNull(catalogName, "catalogName is null");
-        this.schemaName = checkNotNull(schemaName, "schemaName is null");
-        this.tableName = checkNotNull(tableName, "tableName is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+        this.catalogName = requireNonNull(catalogName, "catalogName is null");
+        this.schemaName = requireNonNull(schemaName, "schemaName is null");
+        this.tableName = requireNonNull(tableName, "tableName is null");
     }
 
     @JsonProperty
-    public Session getSession()
+    public String getConnectorId()
     {
-        return session;
+        return connectorId;
     }
 
     @JsonProperty
@@ -76,13 +75,13 @@ public class InformationSchemaTableHandle
     @Override
     public String toString()
     {
-        return "information_schema:" + catalogName + ":" + schemaName + ":" + tableName;
+        return connectorId + ":" + catalogName + ":" + schemaName + ":" + tableName;
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(session, catalogName, schemaName, tableName);
+        return Objects.hash(connectorId, catalogName, schemaName, tableName);
     }
 
     @Override
@@ -95,7 +94,7 @@ public class InformationSchemaTableHandle
             return false;
         }
         InformationSchemaTableHandle other = (InformationSchemaTableHandle) obj;
-        return Objects.equals(this.session, other.session) &&
+        return Objects.equals(this.connectorId, other.connectorId) &&
                 Objects.equals(this.catalogName, other.catalogName) &&
                 Objects.equals(this.schemaName, other.schemaName) &&
                 Objects.equals(this.tableName, other.tableName);

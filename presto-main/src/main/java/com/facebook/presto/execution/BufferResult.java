@@ -13,8 +13,6 @@
  */
 package com.facebook.presto.execution;
 
-import com.facebook.presto.PagePartitionFunction;
-import com.facebook.presto.UnpartitionedPagePartitionFunction;
 import com.facebook.presto.spi.Page;
 import com.google.common.collect.ImmutableList;
 
@@ -22,33 +20,32 @@ import java.util.List;
 import java.util.Objects;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.util.Objects.requireNonNull;
 
 public class BufferResult
 {
-    public static BufferResult emptyResults(long token, boolean bufferClosed)
+    public static BufferResult emptyResults(String taskInstanceId, long token, boolean bufferComplete)
     {
-        return new BufferResult(token, token, bufferClosed, ImmutableList.<Page>of(), new UnpartitionedPagePartitionFunction());
+        return new BufferResult(taskInstanceId, token, token, bufferComplete, ImmutableList.<Page>of());
     }
 
+    private final String taskInstanceId;
     private final long token;
     private final long nextToken;
-    private final boolean bufferClosed;
+    private final boolean bufferComplete;
     private final List<Page> pages;
-    private final PagePartitionFunction partitionFunction;
 
-    public BufferResult(long token, long nextToken, boolean bufferClosed, List<Page> pages)
+    public BufferResult(String taskInstanceId, long token, long nextToken, boolean bufferComplete, List<Page> pages)
     {
-        this(token, nextToken, bufferClosed, pages, new UnpartitionedPagePartitionFunction());
-    }
+        checkArgument(!isNullOrEmpty(taskInstanceId), "taskInstanceId is null");
 
-    public BufferResult(long token, long nextToken, boolean bufferClosed, List<Page> pages, PagePartitionFunction partitionFunction)
-    {
+        this.taskInstanceId = taskInstanceId;
         this.token = token;
         this.nextToken = nextToken;
-        this.bufferClosed = bufferClosed;
-        this.pages = ImmutableList.copyOf(checkNotNull(pages, "pages is null"));
-        this.partitionFunction = partitionFunction;
+        this.bufferComplete = bufferComplete;
+        this.pages = ImmutableList.copyOf(requireNonNull(pages, "pages is null"));
     }
 
     public long getToken()
@@ -61,14 +58,14 @@ public class BufferResult
         return nextToken;
     }
 
-    public boolean isBufferClosed()
+    public boolean isBufferComplete()
     {
-        return bufferClosed;
+        return bufferComplete;
     }
 
     public List<Page> getPages()
     {
-        return partitionFunction.partition(pages);
+        return pages;
     }
 
     public int size()
@@ -81,27 +78,32 @@ public class BufferResult
         return pages.isEmpty();
     }
 
-    @Override
-    public int hashCode()
+    public String getTaskInstanceId()
     {
-        return Objects.hash(token, nextToken, bufferClosed, pages, partitionFunction);
+        return taskInstanceId;
     }
 
     @Override
-    public boolean equals(Object obj)
+    public boolean equals(Object o)
     {
-        if (this == obj) {
+        if (this == o) {
             return true;
         }
-        if (obj == null || getClass() != obj.getClass()) {
+        if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        final BufferResult other = (BufferResult) obj;
-        return Objects.equals(this.token, other.token) &&
-                Objects.equals(this.nextToken, other.nextToken) &&
-                Objects.equals(this.bufferClosed, other.bufferClosed) &&
-                Objects.equals(this.pages, other.pages) &&
-                Objects.equals(this.partitionFunction, other.partitionFunction);
+        BufferResult that = (BufferResult) o;
+        return Objects.equals(token, that.token) &&
+                Objects.equals(nextToken, that.nextToken) &&
+                Objects.equals(taskInstanceId, that.taskInstanceId) &&
+                Objects.equals(bufferComplete, that.bufferComplete) &&
+                Objects.equals(pages, that.pages);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return Objects.hash(token, nextToken, taskInstanceId, bufferComplete, pages);
     }
 
     @Override
@@ -110,9 +112,9 @@ public class BufferResult
         return toStringHelper(this)
                 .add("token", token)
                 .add("nextToken", nextToken)
-                .add("bufferClosed", bufferClosed)
+                .add("taskInstanceId", taskInstanceId)
+                .add("bufferComplete", bufferComplete)
                 .add("pages", pages)
-                .add("partitionFunction", partitionFunction)
                 .toString();
     }
 }

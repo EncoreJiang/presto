@@ -14,6 +14,8 @@
 package com.facebook.presto.orc.stream;
 
 import com.facebook.presto.orc.OrcCorruptionException;
+import com.facebook.presto.orc.memory.AbstractAggregatedMemoryContext;
+import com.facebook.presto.orc.memory.LocalMemoryContext;
 import com.facebook.presto.orc.metadata.CompressionKind;
 import com.google.common.base.MoreObjects;
 import com.google.common.primitives.Ints;
@@ -35,8 +37,8 @@ import static com.facebook.presto.orc.metadata.CompressionKind.SNAPPY;
 import static com.facebook.presto.orc.metadata.CompressionKind.UNCOMPRESSED;
 import static com.facebook.presto.orc.metadata.CompressionKind.ZLIB;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.slice.Slices.EMPTY_SLICE;
+import static java.util.Objects.requireNonNull;
 import static sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET;
 
 public final class OrcInputStream
@@ -52,15 +54,28 @@ public final class OrcInputStream
     private FixedLengthSliceInput current;
 
     private byte[] buffer;
+    private final LocalMemoryContext bufferMemoryUsage;
 
-    public OrcInputStream(String source, FixedLengthSliceInput sliceInput, CompressionKind compressionKind, int bufferSize)
+    // When uncompressed,
+    // * This tracks the memory usage of `current`.
+    // When compressed,
+    // * This tracks the memory usage of compressedSliceInput.
+    // * Memory pointed to by `current` is always part of `buffer`. It shouldn't be counted again.
+    private final LocalMemoryContext fixedMemoryUsage;
+
+    public OrcInputStream(String source, FixedLengthSliceInput sliceInput, CompressionKind compressionKind, int bufferSize, AbstractAggregatedMemoryContext systemMemoryContext)
     {
-        this.source = checkNotNull(source, "source is null");
+        this.source = requireNonNull(source, "source is null");
 
-        checkNotNull(sliceInput, "sliceInput is null");
+        requireNonNull(sliceInput, "sliceInput is null");
 
-        this.compressionKind = checkNotNull(compressionKind, "compressionKind is null");
+        this.compressionKind = requireNonNull(compressionKind, "compressionKind is null");
         this.maxBufferSize = bufferSize;
+
+        requireNonNull(systemMemoryContext, "systemMemoryContext is null");
+        this.bufferMemoryUsage = systemMemoryContext.newLocalMemoryContext();
+        this.fixedMemoryUsage = systemMemoryContext.newLocalMemoryContext();
+        this.fixedMemoryUsage.setBytes(sliceInput.length());
 
         if (compressionKind == UNCOMPRESSED) {
             this.current = sliceInput;
@@ -68,7 +83,7 @@ public final class OrcInputStream
         }
         else {
             checkArgument(compressionKind == SNAPPY || compressionKind == ZLIB, "%s compression not supported", compressionKind);
-            this.compressedSliceInput = checkNotNull(sliceInput, "compressedSliceInput is null");
+            this.compressedSliceInput = sliceInput;
             this.current = EMPTY_SLICE.getInput();
         }
     }
@@ -78,6 +93,10 @@ public final class OrcInputStream
             throws IOException
     {
         current = null;
+        fixedMemoryUsage.setBytes(compressedSliceInput.length()); // see comments above for fixedMemoryUsage
+
+        buffer = null;
+        bufferMemoryUsage.setBytes(0);
     }
 
     @Override
@@ -279,7 +298,7 @@ public final class OrcInputStream
         int inLength = in.length();
 
         int uncompressedLength = Snappy.getUncompressedLength(inArray, inOffset);
-        checkArgument(uncompressedLength <= maxBufferSize, "Snappy requires buffer (%d) larger than max size (%d)", uncompressedLength, maxBufferSize);
+        checkArgument(uncompressedLength <= maxBufferSize, "Snappy requires buffer (%s) larger than max size (%s)", uncompressedLength, maxBufferSize);
         allocateOrGrowBuffer(uncompressedLength, false);
 
         return Snappy.uncompress(inArray, inOffset, inLength, buffer, 0);
@@ -295,5 +314,6 @@ public final class OrcInputStream
                 buffer = new byte[Math.min(size, maxBufferSize)];
             }
         }
+        bufferMemoryUsage.setBytes(buffer.length);
     }
 }

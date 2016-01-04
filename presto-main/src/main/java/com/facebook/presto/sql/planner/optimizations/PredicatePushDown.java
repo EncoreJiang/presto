@@ -34,20 +34,18 @@ import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
-import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.ExpressionTreeRewriter;
-import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.NullLiteral;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.google.common.base.Preconditions;
@@ -66,6 +64,7 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -77,19 +76,18 @@ import static com.facebook.presto.sql.ExpressionUtils.stripNonDeterministicConju
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
 import static com.facebook.presto.sql.planner.DeterminismEvaluator.isDeterministic;
 import static com.facebook.presto.sql.planner.EqualityInference.createEqualityInference;
-import static com.facebook.presto.sql.planner.plan.JoinNode.Type.CROSS;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.FULL;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.LEFT;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.RIGHT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.equalTo;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.transform;
+import static java.util.Objects.requireNonNull;
 
 public class PredicatePushDown
         extends PlanOptimizer
@@ -101,23 +99,23 @@ public class PredicatePushDown
 
     public PredicatePushDown(Metadata metadata, SqlParser sqlParser)
     {
-        this.metadata = checkNotNull(metadata, "metadata is null");
-        this.sqlParser = checkNotNull(sqlParser, "sqlParser is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
     }
 
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        checkNotNull(plan, "plan is null");
-        checkNotNull(session, "session is null");
-        checkNotNull(types, "types is null");
-        checkNotNull(idAllocator, "idAllocator is null");
+        requireNonNull(plan, "plan is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(types, "types is null");
+        requireNonNull(idAllocator, "idAllocator is null");
 
-        return PlanRewriter.rewriteWith(new Rewriter(symbolAllocator, idAllocator, metadata, sqlParser, session), plan, BooleanLiteral.TRUE_LITERAL);
+        return SimplePlanRewriter.rewriteWith(new Rewriter(symbolAllocator, idAllocator, metadata, sqlParser, session), plan, BooleanLiteral.TRUE_LITERAL);
     }
 
     private static class Rewriter
-            extends PlanRewriter<Expression>
+            extends SimplePlanRewriter<Expression>
     {
         private final SymbolAllocator symbolAllocator;
         private final PlanNodeIdAllocator idAllocator;
@@ -132,11 +130,11 @@ public class PredicatePushDown
                 SqlParser sqlParser,
                 Session session)
         {
-            this.symbolAllocator = checkNotNull(symbolAllocator, "symbolAllocator is null");
-            this.idAllocator = checkNotNull(idAllocator, "idAllocator is null");
-            this.metadata = checkNotNull(metadata, "metadata is null");
-            this.sqlParser = checkNotNull(sqlParser, "sqlParser is null");
-            this.session = checkNotNull(session, "session is null");
+            this.symbolAllocator = requireNonNull(symbolAllocator, "symbolAllocator is null");
+            this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
+            this.metadata = requireNonNull(metadata, "metadata is null");
+            this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
+            this.session = requireNonNull(session, "session is null");
         }
 
         @Override
@@ -176,8 +174,7 @@ public class PredicatePushDown
                 return new ExchangeNode(
                         node.getId(),
                         node.getType(),
-                        node.getPartitionKeys(),
-                        node.getHashSymbol(),
+                        node.getPartitionFunction(),
                         builder.build(),
                         node.getOutputSymbols(),
                         node.getInputs());
@@ -257,10 +254,8 @@ public class PredicatePushDown
         {
             Expression inheritedPredicate = context.get();
 
-            boolean isCrossJoin = (node.getType() == JoinNode.Type.CROSS);
-
             // See if we can rewrite outer joins in terms of a plain inner join
-            node = tryNormalizeToInnerJoin(node, inheritedPredicate);
+            node = tryNormalizeToOuterToInnerJoin(node, inheritedPredicate);
 
             Expression leftEffectivePredicate = EffectivePredicateExtractor.extract(node.getLeft(), symbolAllocator.getTypes());
             Expression rightEffectivePredicate = EffectivePredicateExtractor.extract(node.getRight(), symbolAllocator.getTypes());
@@ -319,12 +314,12 @@ public class PredicatePushDown
             PlanNode rightSource = context.rewrite(node.getRight(), rightPredicate);
 
             PlanNode output = node;
-            if (leftSource != node.getLeft() || rightSource != node.getRight() || !newJoinPredicate.equals(joinPredicate) || isCrossJoin) {
+            if (leftSource != node.getLeft() || rightSource != node.getRight() || !newJoinPredicate.equals(joinPredicate)) {
                 List<JoinNode.EquiJoinClause> criteria = node.getCriteria();
+                Iterable<Expression> simplifiedJoinConjuncts = null;
 
                 // Rewrite criteria and add projections if there is a new join predicate
-
-                if (!newJoinPredicate.equals(joinPredicate) || isCrossJoin) {
+                if (!newJoinPredicate.equals(joinPredicate)) {
                     // Create identity projections for all existing symbols
                     ImmutableMap.Builder<Symbol, Expression> leftProjections = ImmutableMap.builder();
 
@@ -337,13 +332,8 @@ public class PredicatePushDown
                             .getOutputSymbols().stream()
                             .collect(Collectors.toMap(key -> key, Symbol::toQualifiedNameReference)));
 
-                    // HACK! we don't support cross joins right now, so put in a simple fake join predicate instead if all of the join clauses got simplified out
-                    // TODO: remove this code when cross join support is added
-                    Iterable<Expression> simplifiedJoinConjuncts = transform(extractConjuncts(newJoinPredicate), this::simplifyExpression);
+                    simplifiedJoinConjuncts = transform(extractConjuncts(newJoinPredicate), this::simplifyExpression);
                     simplifiedJoinConjuncts = filter(simplifiedJoinConjuncts, not(Predicates.<Expression>equalTo(BooleanLiteral.TRUE_LITERAL)));
-                    if (Iterables.isEmpty(simplifiedJoinConjuncts)) {
-                        simplifiedJoinConjuncts = ImmutableList.<Expression>of(new ComparisonExpression(ComparisonExpression.Type.EQUAL, new LongLiteral("0"), new LongLiteral("0")));
-                    }
 
                     // Create new projections for the new join clauses
                     ImmutableList.Builder<JoinNode.EquiJoinClause> builder = ImmutableList.builder();
@@ -368,7 +358,13 @@ public class PredicatePushDown
                     rightSource = new ProjectNode(idAllocator.getNextId(), rightSource, rightProjections.build());
                     criteria = builder.build();
                 }
-                output = new JoinNode(node.getId(), node.getType(), leftSource, rightSource, criteria, node.getLeftHashSymbol(), node.getRightHashSymbol());
+
+                if (simplifiedJoinConjuncts != null && Iterables.isEmpty(simplifiedJoinConjuncts)) {
+                    output = new JoinNode(node.getId(), INNER, leftSource, rightSource, criteria, Optional.<Symbol>empty(), Optional.<Symbol>empty());
+                }
+                else {
+                    output = new JoinNode(node.getId(), node.getType(), leftSource, rightSource, criteria, node.getLeftHashSymbol(), node.getRightHashSymbol());
+                }
             }
             if (!postJoinPredicate.equals(BooleanLiteral.TRUE_LITERAL)) {
                 output = new FilterNode(idAllocator.getNextId(), output, postJoinPredicate);
@@ -614,12 +610,12 @@ public class PredicatePushDown
             return getExpressionTypes(session, metadata, sqlParser, symbolAllocator.getTypes(), expression).get(expression);
         }
 
-        private JoinNode tryNormalizeToInnerJoin(JoinNode node, Expression inheritedPredicate)
+        private JoinNode tryNormalizeToOuterToInnerJoin(JoinNode node, Expression inheritedPredicate)
         {
-            Preconditions.checkArgument(EnumSet.of(INNER, RIGHT, LEFT, FULL, CROSS).contains(node.getType()), "Unsupported join type: %s", node.getType());
+            Preconditions.checkArgument(EnumSet.of(INNER, RIGHT, LEFT, FULL).contains(node.getType()), "Unsupported join type: %s", node.getType());
 
-            if (node.getType() == JoinNode.Type.CROSS) {
-                return new JoinNode(node.getId(), JoinNode.Type.INNER, node.getLeft(), node.getRight(), node.getCriteria(), node.getLeftHashSymbol(), node.getRightHashSymbol());
+            if (node.getType() == JoinNode.Type.INNER) {
+                return node;
             }
 
             if (node.getType() == JoinNode.Type.FULL) {
@@ -637,8 +633,7 @@ public class PredicatePushDown
                 }
             }
 
-            if (node.getType() == JoinNode.Type.INNER ||
-                    node.getType() == JoinNode.Type.LEFT && !canConvertOuterToInner(node.getRight().getOutputSymbols(), inheritedPredicate) ||
+            if (node.getType() == JoinNode.Type.LEFT && !canConvertOuterToInner(node.getRight().getOutputSymbols(), inheritedPredicate) ||
                     node.getType() == JoinNode.Type.RIGHT && !canConvertOuterToInner(node.getLeft().getOutputSymbols(), inheritedPredicate)) {
                 return node;
             }
@@ -761,6 +756,11 @@ public class PredicatePushDown
         @Override
         public PlanNode visitAggregation(AggregationNode node, RewriteContext<Expression> context)
         {
+            if (node.getGroupBy().isEmpty()) {
+                // cannot push down through non-grouped aggregation
+                return visitPlan(node, context);
+            }
+
             Expression inheritedPredicate = context.get();
 
             EqualityInference equalityInference = createEqualityInference(inheritedPredicate);
@@ -864,10 +864,7 @@ public class PredicatePushDown
         {
             Expression predicate = simplifyExpression(context.get());
 
-            if (BooleanLiteral.FALSE_LITERAL.equals(predicate) || predicate instanceof NullLiteral) {
-                return new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of());
-            }
-            else if (!BooleanLiteral.TRUE_LITERAL.equals(predicate)) {
+            if (!BooleanLiteral.TRUE_LITERAL.equals(predicate)) {
                 return new FilterNode(idAllocator.getNextId(), node, predicate);
             }
 

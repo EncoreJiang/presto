@@ -34,30 +34,30 @@ import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.TimeType.TIME;
 import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKey;
+import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKeyForOffset;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
-import static java.util.Locale.ENGLISH;
 import static org.joda.time.DateTimeZone.UTC;
 
 public class TestTimestamp
 {
     private static final TimeZoneKey TIME_ZONE_KEY = getTimeZoneKey("Europe/Berlin");
     private static final DateTimeZone DATE_TIME_ZONE = getDateTimeZone(TIME_ZONE_KEY);
+    private static final TimeZoneKey WEIRD_TIME_ZONE_KEY = getTimeZoneKeyForOffset(7 * 60 + 9);
+    private static final DateTimeZone WEIRD_ZONE = getDateTimeZone(WEIRD_TIME_ZONE_KEY);
+    private static final TimeZoneKey ORAL_TIME_ZONE_KEY = getTimeZoneKey("Asia/Oral");
+    private static final DateTimeZone ORAL_ZONE = getDateTimeZone(ORAL_TIME_ZONE_KEY);
 
     private FunctionAssertions functionAssertions;
 
     @BeforeClass
     public void setUp()
     {
-        Session session = Session.builder()
-                .setUser("user")
-                .setSource("test")
-                .setCatalog("catalog")
-                .setSchema("schema")
+        Session session = testSessionBuilder()
                 .setTimeZoneKey(TIME_ZONE_KEY)
-                .setLocale(ENGLISH)
                 .build();
         functionAssertions = new FunctionAssertions(session);
     }
@@ -210,10 +210,54 @@ public class TestTimestamp
     @Test
     public void testCastFromSlice()
     {
-        assertFunction("cast('2001-1-22 03:04:05.321' as timestamp) = TIMESTAMP '2001-01-22 03:04:05.321'", BOOLEAN, true);
-        assertFunction("cast('2001-1-22 03:04:05' as timestamp) = TIMESTAMP '2001-01-22 03:04:05.000'", BOOLEAN, true);
-        assertFunction("cast('2001-1-22 03:04' as timestamp) = TIMESTAMP '2001-01-22 03:04:00.000'", BOOLEAN, true);
-        assertFunction("cast('2001-1-22' as timestamp) = TIMESTAMP '2001-01-22 00:00:00.000'", BOOLEAN, true);
+        assertFunction("cast('2001-1-22 03:04:05.321' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 321, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04:05' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 0, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 0, 0, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 0, 0, 0, 0, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+
+        assertFunction("cast('2001-1-22 03:04:05.321 +07:09' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 321, WEIRD_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04:05 +07:09' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 0, WEIRD_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04 +07:09' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 0, 0, WEIRD_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 +07:09' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 0, 0, 0, 0, WEIRD_ZONE).getMillis(), TIME_ZONE_KEY));
+
+        assertFunction("cast('2001-1-22 03:04:05.321 Asia/Oral' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 321, ORAL_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04:05 Asia/Oral' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 0, ORAL_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04 Asia/Oral' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 0, 0, ORAL_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 Asia/Oral' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 0, 0, 0, 0, ORAL_ZONE).getMillis(), TIME_ZONE_KEY));
+
+        assertFunction("cast('\n\t 2001-1-22 03:04:05.321' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 321, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('2001-1-22 03:04:05.321 \t\n' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 321, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+        assertFunction("cast('\n\t 2001-1-22 03:04:05.321 \t\n' as timestamp)",
+                TIMESTAMP,
+                new SqlTimestamp(new DateTime(2001, 1, 22, 3, 4, 5, 321, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
     }
 
     @Test

@@ -33,8 +33,8 @@ import java.util.Optional;
 import static com.facebook.presto.operator.GroupByHash.createGroupByHash;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class TopNRowNumberOperator
         implements Operator
@@ -52,6 +52,7 @@ public class TopNRowNumberOperator
         private final List<Integer> sortChannels;
         private final List<SortOrder> sortOrder;
         private final int maxRowCountPerPartition;
+        private final boolean partial;
         private final Optional<Integer> hashChannel;
         private final int expectedPositions;
 
@@ -75,12 +76,13 @@ public class TopNRowNumberOperator
         {
             this.operatorId = operatorId;
             this.sourceTypes = ImmutableList.copyOf(sourceTypes);
-            this.outputChannels = ImmutableList.copyOf(checkNotNull(outputChannels, "outputChannels is null"));
-            this.partitionChannels = ImmutableList.copyOf(checkNotNull(partitionChannels, "partitionChannels is null"));
-            this.partitionTypes = ImmutableList.copyOf(checkNotNull(partitionTypes, "partitionTypes is null"));
-            this.sortChannels = ImmutableList.copyOf(checkNotNull(sortChannels));
-            this.sortOrder = ImmutableList.copyOf(checkNotNull(sortOrder));
-            this.hashChannel = checkNotNull(hashChannel, "hashChannel is null");
+            this.outputChannels = ImmutableList.copyOf(requireNonNull(outputChannels, "outputChannels is null"));
+            this.partitionChannels = ImmutableList.copyOf(requireNonNull(partitionChannels, "partitionChannels is null"));
+            this.partitionTypes = ImmutableList.copyOf(requireNonNull(partitionTypes, "partitionTypes is null"));
+            this.sortChannels = ImmutableList.copyOf(requireNonNull(sortChannels));
+            this.sortOrder = ImmutableList.copyOf(requireNonNull(sortOrder));
+            this.hashChannel = requireNonNull(hashChannel, "hashChannel is null");
+            this.partial = partial;
             checkArgument(maxRowCountPerPartition > 0, "maxRowCountPerPartition must be > 0");
             this.maxRowCountPerPartition = maxRowCountPerPartition;
             checkArgument(expectedPositions > 0, "expectedPositions must be > 0");
@@ -126,6 +128,12 @@ public class TopNRowNumberOperator
         {
             closed = true;
         }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new TopNRowNumberOperatorFactory(operatorId, sourceTypes, outputChannels, partitionChannels, partitionTypes, sortChannels, sortOrder, maxRowCountPerPartition, partial, hashChannel, expectedPositions);
+        }
     }
 
     private static final DataSize OVERHEAD_PER_VALUE = new DataSize(100, DataSize.Unit.BYTE); // for estimating in-memory size. This is a completely arbitrary number
@@ -160,12 +168,12 @@ public class TopNRowNumberOperator
             Optional<Integer> hashChannel,
             int expectedPositions)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
-        this.outputChannels = Ints.toArray(checkNotNull(outputChannels, "outputChannels is null"));
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.outputChannels = Ints.toArray(requireNonNull(outputChannels, "outputChannels is null"));
 
-        this.sortChannels = checkNotNull(sortChannels, "sortChannels is null");
-        this.sortOrders = checkNotNull(sortOrders, "sortOrders is null");
-        this.sortTypes = checkNotNull(sortTypes, "sortTypes is null");
+        this.sortChannels = requireNonNull(sortChannels, "sortChannels is null");
+        this.sortOrders = requireNonNull(sortOrders, "sortOrders is null");
+        this.sortTypes = requireNonNull(sortTypes, "sortTypes is null");
 
         checkArgument(maxRowCountPerPartition > 0, "maxRowCountPerPartition must be > 0");
         this.maxRowCountPerPartition = maxRowCountPerPartition;
@@ -205,7 +213,7 @@ public class TopNRowNumberOperator
     @Override
     public boolean isFinished()
     {
-        return finishing && isEmpty();
+        return finishing && isEmpty() && !isFlushing();
     }
 
     @Override
@@ -218,7 +226,7 @@ public class TopNRowNumberOperator
     public void addInput(Page page)
     {
         checkState(!finishing, "Operator is already finishing");
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
         checkState(!isFlushing(), "Cannot add input with the operator is flushing data");
         processPage(page);
     }
@@ -226,7 +234,7 @@ public class TopNRowNumberOperator
     @Override
     public Page getOutput()
     {
-        if (finishing && !isEmpty()) {
+        if (finishing && !isFinished()) {
             return getPage();
         }
         return null;
@@ -382,7 +390,7 @@ public class TopNRowNumberOperator
     {
         long size = OVERHEAD_PER_VALUE.toBytes();
         for (Block value : row) {
-            size += value.getSizeInBytes();
+            size += value.getRetainedSizeInBytes();
         }
         return size;
     }

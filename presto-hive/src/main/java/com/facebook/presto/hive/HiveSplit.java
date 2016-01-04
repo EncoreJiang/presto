@@ -13,10 +13,9 @@
  */
 package com.facebook.presto.hive;
 
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.HostAddress;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
@@ -27,7 +26,7 @@ import java.util.Properties;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class HiveSplit
         implements ConnectorSplit
@@ -42,7 +41,6 @@ public class HiveSplit
     private final String database;
     private final String table;
     private final String partitionName;
-    private final ConnectorSession session;
     private final TupleDomain<HiveColumnHandle> effectivePredicate;
     private final boolean forceLocalScheduling;
 
@@ -59,20 +57,19 @@ public class HiveSplit
             @JsonProperty("partitionKeys") List<HivePartitionKey> partitionKeys,
             @JsonProperty("addresses") List<HostAddress> addresses,
             @JsonProperty("forceLocalScheduling") boolean forceLocalScheduling,
-            @JsonProperty("session") ConnectorSession session,
             @JsonProperty("effectivePredicate") TupleDomain<HiveColumnHandle> effectivePredicate)
     {
-        checkNotNull(clientId, "clientId is null");
+        requireNonNull(clientId, "clientId is null");
         checkArgument(start >= 0, "start must be positive");
         checkArgument(length >= 0, "length must be positive");
-        checkNotNull(database, "database is null");
-        checkNotNull(table, "table is null");
-        checkNotNull(partitionName, "partitionName is null");
-        checkNotNull(path, "path is null");
-        checkNotNull(schema, "schema is null");
-        checkNotNull(partitionKeys, "partitionKeys is null");
-        checkNotNull(addresses, "addresses is null");
-        checkNotNull(effectivePredicate, "tupleDomain is null");
+        requireNonNull(database, "database is null");
+        requireNonNull(table, "table is null");
+        requireNonNull(partitionName, "partitionName is null");
+        requireNonNull(path, "path is null");
+        requireNonNull(schema, "schema is null");
+        requireNonNull(partitionKeys, "partitionKeys is null");
+        requireNonNull(addresses, "addresses is null");
+        requireNonNull(effectivePredicate, "tupleDomain is null");
 
         this.clientId = clientId;
         this.database = database;
@@ -85,7 +82,6 @@ public class HiveSplit
         this.partitionKeys = ImmutableList.copyOf(partitionKeys);
         this.addresses = ImmutableList.copyOf(addresses);
         this.forceLocalScheduling = forceLocalScheduling;
-        this.session = session;
         this.effectivePredicate = effectivePredicate;
     }
 
@@ -148,12 +144,6 @@ public class HiveSplit
     public List<HostAddress> getAddresses()
     {
         return addresses;
-    }
-
-    @JsonProperty
-    public ConnectorSession getSession()
-    {
-        return session;
     }
 
     @JsonProperty

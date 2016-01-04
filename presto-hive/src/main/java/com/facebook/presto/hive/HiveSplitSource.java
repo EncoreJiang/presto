@@ -13,90 +13,66 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.hive.util.AsyncQueue;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorSplitSource;
-import com.facebook.presto.spi.HostAddress;
 import com.facebook.presto.spi.PrestoException;
+import com.google.common.annotations.VisibleForTesting;
 
 import java.io.FileNotFoundException;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_FILE_NOT_FOUND;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNKNOWN_ERROR;
 import static com.google.common.base.Preconditions.checkState;
+import static io.airlift.concurrent.MoreFutures.failedFuture;
 
 class HiveSplitSource
         implements ConnectorSplitSource
 {
-    private static final ConnectorSplit FINISHED_MARKER = new ConnectorSplit()
-    {
-        @Override
-        public boolean isRemotelyAccessible()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public List<HostAddress> getAddresses()
-        {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public Object getInfo()
-        {
-            throw new UnsupportedOperationException();
-        }
-    };
     private final String connectorId;
-    private final BlockingQueue<ConnectorSplit> queue = new LinkedBlockingQueue<>();
-    private final AtomicInteger outstandingSplitCount = new AtomicInteger();
+    private final AsyncQueue<ConnectorSplit> queue;
     private final AtomicReference<Throwable> throwable = new AtomicReference<>();
-    private final int maxOutstandingSplits;
     private final HiveSplitLoader splitLoader;
     private volatile boolean closed;
 
-    HiveSplitSource(String connectorId, int maxOutstandingSplits, HiveSplitLoader splitLoader)
+    HiveSplitSource(String connectorId, int maxOutstandingSplits, HiveSplitLoader splitLoader, Executor executor)
     {
         this.connectorId = connectorId;
-        this.maxOutstandingSplits = maxOutstandingSplits;
+        this.queue = new AsyncQueue<>(maxOutstandingSplits, executor);
         this.splitLoader = splitLoader;
     }
 
+    @VisibleForTesting
     int getOutstandingSplitCount()
     {
-        return outstandingSplitCount.get();
+        return queue.size();
     }
 
-    void addToQueue(Iterable<? extends ConnectorSplit> splits)
+    CompletableFuture<?> addToQueue(Iterable<? extends ConnectorSplit> splits)
     {
+        CompletableFuture<?> lastResult = CompletableFuture.completedFuture(null);
         for (ConnectorSplit split : splits) {
-            addToQueue(split);
+            lastResult = addToQueue(split);
         }
+        return lastResult;
     }
 
-    void addToQueue(ConnectorSplit split)
+    CompletableFuture<?> addToQueue(ConnectorSplit split)
     {
         if (throwable.get() == null) {
-            outstandingSplitCount.incrementAndGet();
-            queue.add(split);
+            return queue.offer(split);
         }
-    }
-
-    boolean isQueueFull()
-    {
-        return outstandingSplitCount.get() >= maxOutstandingSplits;
+        return CompletableFuture.completedFuture(null);
     }
 
     void finished()
     {
         if (throwable.get() == null) {
-            queue.add(FINISHED_MARKER);
+            queue.finish();
             splitLoader.stop();
         }
     }
@@ -105,8 +81,8 @@ class HiveSplitSource
     {
         // only record the first error message
         if (throwable.compareAndSet(null, e)) {
-            // add the finish marker
-            queue.add(FINISHED_MARKER);
+            // add finish the queue
+            queue.finish();
 
             // no need to process any more jobs
             splitLoader.stop();
@@ -120,42 +96,21 @@ class HiveSplitSource
     }
 
     @Override
-    public List<ConnectorSplit> getNextBatch(int maxSize)
-            throws InterruptedException
+    public CompletableFuture<List<ConnectorSplit>> getNextBatch(int maxSize)
     {
         checkState(!closed, "Provider is already closed");
 
-        // wait for at least one split and then take as may extra splits as possible
-        // if an error has been registered, the take will succeed immediately because
-        // will be at least one finished marker in the queue
-        List<ConnectorSplit> splits = new ArrayList<>(maxSize);
-        splits.add(queue.take());
-        queue.drainTo(splits, maxSize - 1);
-
-        // check if we got the finished marker in our list
-        int finishedIndex = splits.indexOf(FINISHED_MARKER);
-        if (finishedIndex >= 0) {
-            // add the finish marker back to the queue so future callers will not block indefinitely
-            queue.add(FINISHED_MARKER);
-            // drop all splits after the finish marker (this shouldn't happen in a normal exit, but be safe)
-            splits = splits.subList(0, finishedIndex);
-        }
+        CompletableFuture<List<ConnectorSplit>> future = queue.getBatchAsync(maxSize);
 
         // Before returning, check if there is a registered failure.
         // If so, we want to throw the error, instead of returning because the scheduler can block
         // while scheduling splits and wait for work to finish before continuing.  In this case,
         // we want to end the query as soon as possible and abort the work
         if (throwable.get() != null) {
-            throw propagatePrestoException(throwable.get());
+            return failedFuture(throwable.get());
         }
 
-        // decrement the outstanding split count by the number of splits we took
-        if (outstandingSplitCount.addAndGet(-splits.size()) < maxOutstandingSplits) {
-            // we are below the low water mark (and there isn't a failure) so resume scanning hdfs
-            splitLoader.resume();
-        }
-
-        return splits;
+        return future;
     }
 
     @Override
@@ -163,7 +118,7 @@ class HiveSplitSource
     {
         // the finished marker must be checked before checking the throwable
         // to avoid a race with the fail method
-        boolean isFinished = queue.peek() == FINISHED_MARKER;
+        boolean isFinished = queue.isFinished();
         if (throwable.get() != null) {
             throw propagatePrestoException(throwable.get());
         }
@@ -173,7 +128,7 @@ class HiveSplitSource
     @Override
     public void close()
     {
-        queue.add(FINISHED_MARKER);
+        queue.finish();
         splitLoader.stop();
 
         closed = true;

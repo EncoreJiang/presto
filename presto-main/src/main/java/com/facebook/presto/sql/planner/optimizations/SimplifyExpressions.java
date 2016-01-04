@@ -25,11 +25,13 @@ import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
-import com.facebook.presto.sql.tree.BooleanLiteral;
+import com.facebook.presto.sql.planner.plan.ValuesNode;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.NullLiteral;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 
@@ -37,7 +39,9 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.sql.tree.BooleanLiteral.FALSE_LITERAL;
+import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
+import static java.util.Objects.requireNonNull;
 
 public class SimplifyExpressions
         extends PlanOptimizer
@@ -47,36 +51,38 @@ public class SimplifyExpressions
 
     public SimplifyExpressions(Metadata metadata, SqlParser sqlParser)
     {
-        this.metadata = checkNotNull(metadata, "metadata is null");
-        this.sqlParser = checkNotNull(sqlParser, "sqlParser is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
     }
 
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        checkNotNull(plan, "plan is null");
-        checkNotNull(session, "session is null");
-        checkNotNull(types, "types is null");
-        checkNotNull(symbolAllocator, "symbolAllocator is null");
-        checkNotNull(idAllocator, "idAllocator is null");
+        requireNonNull(plan, "plan is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(types, "types is null");
+        requireNonNull(symbolAllocator, "symbolAllocator is null");
+        requireNonNull(idAllocator, "idAllocator is null");
 
-        return PlanRewriter.rewriteWith(new Rewriter(metadata, sqlParser, session, types), plan);
+        return SimplePlanRewriter.rewriteWith(new Rewriter(metadata, sqlParser, session, types, idAllocator), plan);
     }
 
     private static class Rewriter
-            extends PlanRewriter<Void>
+            extends SimplePlanRewriter<Void>
     {
         private final Metadata metadata;
         private final SqlParser sqlParser;
         private final Session session;
         private final Map<Symbol, Type> types;
+        private final PlanNodeIdAllocator idAllocator;
 
-        public Rewriter(Metadata metadata, SqlParser sqlParser, Session session, Map<Symbol, Type> types)
+        public Rewriter(Metadata metadata, SqlParser sqlParser, Session session, Map<Symbol, Type> types, PlanNodeIdAllocator idAllocator)
         {
             this.metadata = metadata;
             this.sqlParser = sqlParser;
             this.session = session;
             this.types = types;
+            this.idAllocator = idAllocator;
         }
 
         @Override
@@ -92,8 +98,13 @@ public class SimplifyExpressions
         {
             PlanNode source = context.rewrite(node.getSource());
             Expression simplified = simplifyExpression(node.getPredicate());
-            if (simplified.equals(BooleanLiteral.TRUE_LITERAL)) {
+            if (simplified.equals(TRUE_LITERAL)) {
                 return source;
+            }
+            // TODO: this needs to check whether the boolean expression coerces to false in a more general way.
+            // E.g., simplify() not always produces a literal when the expression is constant
+            else if (simplified.equals(FALSE_LITERAL) || simplified instanceof NullLiteral) {
+                return new ValuesNode(idAllocator.getNextId(), node.getOutputSymbols(), ImmutableList.of());
             }
             return new FilterNode(node.getId(), source, simplified);
         }

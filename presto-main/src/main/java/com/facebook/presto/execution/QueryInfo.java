@@ -13,14 +13,14 @@
  */
 package com.facebook.presto.execution;
 
-import com.facebook.presto.Session;
+import com.facebook.presto.SessionRepresentation;
 import com.facebook.presto.client.FailureInfo;
 import com.facebook.presto.memory.MemoryPoolId;
 import com.facebook.presto.spi.ErrorCode;
 import com.facebook.presto.spi.StandardErrorCode.ErrorType;
+import com.facebook.presto.transaction.TransactionId;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -31,6 +31,7 @@ import javax.annotation.concurrent.Immutable;
 import java.net.URI;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.spi.StandardErrorCode.toErrorType;
@@ -41,7 +42,7 @@ import static java.util.Objects.requireNonNull;
 public class QueryInfo
 {
     private final QueryId queryId;
-    private final Session session;
+    private final SessionRepresentation session;
     private final QueryState state;
     private final MemoryPoolId memoryPool;
     private final boolean scheduled;
@@ -51,6 +52,8 @@ public class QueryInfo
     private final QueryStats queryStats;
     private final Map<String, String> setSessionProperties;
     private final Set<String> resetSessionProperties;
+    private final Optional<TransactionId> startedTransactionId;
+    private final boolean clearTransactionId;
     private final String updateType;
     private final StageInfo outputStage;
     private final FailureInfo failureInfo;
@@ -61,7 +64,7 @@ public class QueryInfo
     @JsonCreator
     public QueryInfo(
             @JsonProperty("queryId") QueryId queryId,
-            @JsonProperty("session") Session session,
+            @JsonProperty("session") SessionRepresentation session,
             @JsonProperty("state") QueryState state,
             @JsonProperty("memoryPool") MemoryPoolId memoryPool,
             @JsonProperty("scheduled") boolean scheduled,
@@ -71,22 +74,25 @@ public class QueryInfo
             @JsonProperty("queryStats") QueryStats queryStats,
             @JsonProperty("setSessionProperties") Map<String, String> setSessionProperties,
             @JsonProperty("resetSessionProperties") Set<String> resetSessionProperties,
+            @JsonProperty("startedTransactionId") Optional<TransactionId> startedTransactionId,
+            @JsonProperty("clearTransactionId") boolean clearTransactionId,
             @JsonProperty("updateType") String updateType,
             @JsonProperty("outputStage") StageInfo outputStage,
             @JsonProperty("failureInfo") FailureInfo failureInfo,
             @JsonProperty("errorCode") ErrorCode errorCode,
             @JsonProperty("inputs") Set<Input> inputs)
     {
-        Preconditions.checkNotNull(queryId, "queryId is null");
-        Preconditions.checkNotNull(session, "session is null");
-        Preconditions.checkNotNull(state, "state is null");
-        Preconditions.checkNotNull(self, "self is null");
-        Preconditions.checkNotNull(fieldNames, "fieldNames is null");
-        Preconditions.checkNotNull(queryStats, "queryStats is null");
-        Preconditions.checkNotNull(setSessionProperties, "setSessionProperties is null");
-        Preconditions.checkNotNull(resetSessionProperties, "resetSessionProperties is null");
-        Preconditions.checkNotNull(query, "query is null");
-        Preconditions.checkNotNull(inputs, "inputs is null");
+        requireNonNull(queryId, "queryId is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(state, "state is null");
+        requireNonNull(self, "self is null");
+        requireNonNull(fieldNames, "fieldNames is null");
+        requireNonNull(queryStats, "queryStats is null");
+        requireNonNull(setSessionProperties, "setSessionProperties is null");
+        requireNonNull(resetSessionProperties, "resetSessionProperties is null");
+        requireNonNull(startedTransactionId, "startedTransactionId is null");
+        requireNonNull(query, "query is null");
+        requireNonNull(inputs, "inputs is null");
 
         this.queryId = queryId;
         this.session = session;
@@ -99,6 +105,8 @@ public class QueryInfo
         this.queryStats = queryStats;
         this.setSessionProperties = ImmutableMap.copyOf(setSessionProperties);
         this.resetSessionProperties = ImmutableSet.copyOf(resetSessionProperties);
+        this.startedTransactionId = startedTransactionId;
+        this.clearTransactionId = clearTransactionId;
         this.updateType = updateType;
         this.outputStage = outputStage;
         this.failureInfo = failureInfo;
@@ -114,7 +122,7 @@ public class QueryInfo
     }
 
     @JsonProperty
-    public Session getSession()
+    public SessionRepresentation getSession()
     {
         return session;
     }
@@ -171,6 +179,18 @@ public class QueryInfo
     public Set<String> getResetSessionProperties()
     {
         return resetSessionProperties;
+    }
+
+    @JsonProperty
+    public Optional<TransactionId> getStartedTransactionId()
+    {
+        return startedTransactionId;
+    }
+
+    @JsonProperty
+    public boolean isClearTransactionId()
+    {
+        return clearTransactionId;
     }
 
     @Nullable

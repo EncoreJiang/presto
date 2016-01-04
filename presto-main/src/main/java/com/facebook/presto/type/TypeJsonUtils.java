@@ -23,6 +23,8 @@ import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
@@ -36,12 +38,17 @@ import java.util.Map;
 
 import static com.fasterxml.jackson.core.JsonFactory.Feature.CANONICALIZE_FIELD_NAMES;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public final class TypeJsonUtils
 {
     private static final JsonFactory JSON_FACTORY = new JsonFactory().disable(CANONICALIZE_FIELD_NAMES);
+
+    // This object mapper is constructed without .configure(ORDER_MAP_ENTRIES_BY_KEYS, true) because
+    // `OBJECT_MAPPER.writeValueAsString(parser.readValueAsTree());` preserves input order.
+    // Be aware. Using it arbitrarily can produce invalid json (ordered by key is required in presto).
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper(JSON_FACTORY);
 
     private TypeJsonUtils() {}
 
@@ -51,7 +58,7 @@ public final class TypeJsonUtils
             return null;
         }
 
-        try (JsonParser jsonParser = JSON_FACTORY.createJsonParser(value.getInput())) {
+        try (JsonParser jsonParser = JSON_FACTORY.createParser(value.getInput())) {
             jsonParser.nextToken();
             return stackRepresentationToObjectHelper(session, jsonParser, type);
         }
@@ -63,6 +70,12 @@ public final class TypeJsonUtils
     private static Object stackRepresentationToObjectHelper(ConnectorSession session, JsonParser parser, Type type)
             throws IOException
     {
+        // checking whether type is JsonType needs to go before null check because
+        // cast('[null]', array<json>) should be casted to a single item array containing a json document "null" instead of sql null.
+        if (type instanceof JsonType) {
+            return OBJECT_MAPPER.writeValueAsString(parser.readValueAsTree());
+        }
+
         if (parser.getCurrentToken() == JsonToken.VALUE_NULL) {
             return null;
         }
@@ -100,7 +113,7 @@ public final class TypeJsonUtils
                 list.add(value);
                 field++;
             }
-            checkArgument(field == rowType.getFields().size(), "Expected %d fields for type %s", rowType.getFields().size(), type);
+            checkArgument(field == rowType.getFields().size(), "Expected %s fields for type %s", rowType.getFields().size(), type);
 
             return Collections.unmodifiableList(list);
         }
@@ -115,7 +128,7 @@ public final class TypeJsonUtils
             blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1);
         }
         else {
-            blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1, checkNotNull(sliceValue, "sliceValue is null").length());
+            blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), 1, requireNonNull(sliceValue, "sliceValue is null").length());
         }
 
         if (type.getJavaType() == boolean.class) {
@@ -128,7 +141,7 @@ public final class TypeJsonUtils
             type.writeDouble(blockBuilder, getDoubleValue(parser));
         }
         else if (type.getJavaType() == Slice.class) {
-            type.writeSlice(blockBuilder, checkNotNull(sliceValue, "sliceValue is null"));
+            type.writeSlice(blockBuilder, requireNonNull(sliceValue, "sliceValue is null"));
         }
         return type.getObjectValue(session, blockBuilder.build(), 0);
     }
@@ -176,15 +189,82 @@ public final class TypeJsonUtils
         if (baseType.equals(StandardTypes.BOOLEAN) ||
                 baseType.equals(StandardTypes.BIGINT) ||
                 baseType.equals(StandardTypes.DOUBLE) ||
-                baseType.equals(StandardTypes.VARCHAR)) {
+                baseType.equals(StandardTypes.VARCHAR) ||
+                baseType.equals(StandardTypes.JSON)) {
             return true;
         }
         if (type instanceof ArrayType) {
             return canCastFromJson(((ArrayType) type).getElementType());
         }
         if (type instanceof MapType) {
-            return canCastFromJson(((MapType) type).getKeyType()) && canCastFromJson(((MapType) type).getValueType());
+            return isValidJsonObjectKeyType(((MapType) type).getKeyType()) && canCastFromJson(((MapType) type).getValueType());
         }
         return false;
+    }
+
+    private static boolean isValidJsonObjectKeyType(Type type)
+    {
+        String baseType = type.getTypeSignature().getBase();
+        return baseType.equals(StandardTypes.BOOLEAN) ||
+                baseType.equals(StandardTypes.BIGINT) ||
+                baseType.equals(StandardTypes.DOUBLE) ||
+                baseType.equals(StandardTypes.VARCHAR);
+    }
+
+    @VisibleForTesting
+    public static void appendToBlockBuilder(Type type, Object element, BlockBuilder blockBuilder)
+    {
+        Class<?> javaType = type.getJavaType();
+        if (element == null) {
+            blockBuilder.appendNull();
+        }
+        else if (type.getTypeSignature().getBase().equals(StandardTypes.ARRAY) && element instanceof Iterable<?>) {
+            BlockBuilder subBlockBuilder = blockBuilder.beginBlockEntry();
+            for (Object subElement : (Iterable<?>) element) {
+                appendToBlockBuilder(type.getTypeParameters().get(0), subElement, subBlockBuilder);
+            }
+            blockBuilder.closeEntry();
+        }
+        else if (type.getTypeSignature().getBase().equals(StandardTypes.ROW) && element instanceof Iterable<?>) {
+            BlockBuilder subBlockBuilder = blockBuilder.beginBlockEntry();
+            int field = 0;
+            for (Object subElement : (Iterable<?>) element) {
+                appendToBlockBuilder(type.getTypeParameters().get(field), subElement, subBlockBuilder);
+                field++;
+            }
+            blockBuilder.closeEntry();
+        }
+        else if (type.getTypeSignature().getBase().equals(StandardTypes.MAP) && element instanceof Map<?, ?>) {
+            BlockBuilder subBlockBuilder = blockBuilder.beginBlockEntry();
+            for (Map.Entry<?, ?> entry : ((Map<?, ?>) element).entrySet()) {
+                appendToBlockBuilder(type.getTypeParameters().get(0), entry.getKey(), subBlockBuilder);
+                appendToBlockBuilder(type.getTypeParameters().get(1), entry.getValue(), subBlockBuilder);
+            }
+            blockBuilder.closeEntry();
+        }
+
+        else if (javaType == boolean.class) {
+            type.writeBoolean(blockBuilder, (Boolean) element);
+        }
+        else if (javaType == long.class) {
+            type.writeLong(blockBuilder, ((Number) element).longValue());
+        }
+        else if (javaType == double.class) {
+            type.writeDouble(blockBuilder, ((Number) element).doubleValue());
+        }
+        else if (javaType == Slice.class) {
+            if (element instanceof String) {
+                type.writeSlice(blockBuilder, Slices.utf8Slice(element.toString()));
+            }
+            else if (element instanceof byte[]) {
+                type.writeSlice(blockBuilder, Slices.wrappedBuffer((byte[]) element));
+            }
+            else {
+                type.writeSlice(blockBuilder, (Slice) element);
+            }
+        }
+        else {
+            type.writeObject(blockBuilder, element);
+        }
     }
 }

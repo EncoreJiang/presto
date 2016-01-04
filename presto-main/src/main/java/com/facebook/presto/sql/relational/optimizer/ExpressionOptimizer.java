@@ -14,9 +14,9 @@
 package com.facebook.presto.sql.relational.optimizer;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.metadata.FunctionInfo;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.sql.relational.CallExpression;
@@ -24,14 +24,13 @@ import com.facebook.presto.sql.relational.ConstantExpression;
 import com.facebook.presto.sql.relational.InputReferenceExpression;
 import com.facebook.presto.sql.relational.RowExpression;
 import com.facebook.presto.sql.relational.RowExpressionVisitor;
-import com.facebook.presto.sql.tree.QualifiedName;
-import com.facebook.presto.type.UnknownType;
 import com.google.common.collect.Iterables;
 
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.sql.relational.Expressions.call;
 import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.relational.Expressions.constantNull;
@@ -44,6 +43,7 @@ import static com.facebook.presto.sql.relational.Signatures.NULL_IF;
 import static com.facebook.presto.sql.relational.Signatures.SWITCH;
 import static com.facebook.presto.sql.relational.Signatures.TRY_CAST;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.instanceOf;
 
 public class ExpressionOptimizer
@@ -80,21 +80,32 @@ public class ExpressionOptimizer
         }
 
         @Override
-        public RowExpression visitCall(CallExpression call, final Void context)
+        public RowExpression visitCall(CallExpression call, Void context)
         {
-            FunctionInfo function;
+            ScalarFunctionImplementation function;
             Signature signature = call.getSignature();
 
             if (signature.getName().equals(CAST)) {
-                if (call.getArguments().get(0).getType().equals(UnknownType.UNKNOWN)) {
-                    return constantNull(call.getType());
-                }
-                function = registry.getCoercion(call.getArguments().get(0).getType(), call.getType());
+                Signature functionSignature = registry.getCoercion(call.getArguments().get(0).getType(), call.getType());
+                function = registry.getScalarFunctionImplementation(functionSignature);
             }
             else {
                 switch (signature.getName()) {
                     // TODO: optimize these special forms
                     case IF:
+                        checkState(call.getArguments().size() == 3, "IF function should have 3 arguments. Get " + call.getArguments().size());
+                        RowExpression optimizedOperand = call.getArguments().get(0).accept(this, context);
+                        if (optimizedOperand instanceof ConstantExpression) {
+                            ConstantExpression constantOperand = (ConstantExpression) optimizedOperand;
+                            checkState(constantOperand.getType().equals(BOOLEAN), "Operand of IF function should be BOOLEAN type. Get type " + constantOperand.getType().getDisplayName());
+                            if (Boolean.TRUE.equals(constantOperand.getValue())) {
+                                return call.getArguments().get(1).accept(this, context);
+                            }
+                            // FALSE and NULL
+                            else {
+                                return call.getArguments().get(2).accept(this, context);
+                            }
+                        }
                     case NULL_IF:
                     case SWITCH:
                     case "WHEN":
@@ -110,11 +121,7 @@ public class ExpressionOptimizer
                                 .collect(toImmutableList());
                         return call(signature, call.getType(), arguments);
                     default:
-                        function = registry.getExactFunction(signature);
-                        if (function == null) {
-                            // TODO: temporary hack to deal with magic timestamp literal functions which don't have an "exact" form and need to be "resolved"
-                            function = registry.resolveFunction(QualifiedName.of(signature.getName()), signature.getArgumentTypes(), false);
-                        }
+                        function = registry.getScalarFunctionImplementation(signature);
                 }
             }
 

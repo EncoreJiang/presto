@@ -38,9 +38,17 @@ public class ChildReplacer
 {
     private static final ChildReplacer INSTANCE = new ChildReplacer();
 
+    /**
+     * Return an identical copy of the given node with its children replaced
+     */
     public static PlanNode replaceChildren(PlanNode node, List<PlanNode> children)
     {
-        return node.accept(INSTANCE, children);
+        for (int i = 0; i < node.getSources().size(); i++) {
+            if (children.get(i) != node.getSources().get(i)) {
+                return node.accept(INSTANCE, children);
+            }
+        }
+        return node;
     }
 
     @Override
@@ -74,8 +82,7 @@ public class ChildReplacer
         return new ExchangeNode(
                 node.getId(),
                 node.getType(),
-                node.getPartitionKeys(),
-                node.getHashSymbol(),
+                node.getPartitionFunction(),
                 newChildren,
                 node.getOutputSymbols(),
                 node.getInputs());
@@ -212,14 +219,26 @@ public class ChildReplacer
     }
 
     @Override
-    public PlanNode visitTableCommit(TableCommitNode node, List<PlanNode> newChildren)
+    public PlanNode visitTableFinish(TableFinishNode node, List<PlanNode> newChildren)
     {
-        return new TableCommitNode(node.getId(), Iterables.getOnlyElement(newChildren), node.getTarget(), node.getOutputSymbols());
+        return new TableFinishNode(node.getId(), Iterables.getOnlyElement(newChildren), node.getTarget(), node.getOutputSymbols());
     }
 
     @Override
     public PlanNode visitUnion(UnionNode node, List<PlanNode> newChildren)
     {
         return new UnionNode(node.getId(), newChildren, node.getSymbolMapping());
+    }
+
+    @Override
+    public PlanNode visitDelete(DeleteNode node, List<PlanNode> newChildren)
+    {
+        return new DeleteNode(node.getId(), Iterables.getOnlyElement(newChildren), node.getTarget(), node.getRowId(), node.getOutputSymbols());
+    }
+
+    @Override
+    public PlanNode visitEnforceSingleRow(EnforceSingleRowNode node, List<PlanNode> newChildren)
+    {
+        return new EnforceSingleRowNode(node.getId(), Iterables.getOnlyElement(newChildren));
     }
 }

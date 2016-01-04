@@ -15,10 +15,12 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.metadata.FunctionListBuilder;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.metadata.ParametricFunction;
+import com.facebook.presto.metadata.SqlFunction;
 import com.facebook.presto.spi.ErrorCodeSupplier;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.analyzer.SemanticErrorCode;
+import com.facebook.presto.sql.analyzer.SemanticException;
 
 import java.util.List;
 
@@ -38,6 +40,18 @@ public abstract class AbstractTestFunctions
         functionAssertions.assertFunction(projection, expectedType, expected);
     }
 
+    protected void assertInvalidFunction(String projection, Type expectedType, String message)
+    {
+        try {
+            assertFunction(projection, expectedType, null);
+            fail("Expected to throw an INVALID_FUNCTION_ARGUMENT exception with message " + message);
+        }
+        catch (PrestoException e) {
+            assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
+            assertEquals(e.getMessage(), message);
+        }
+    }
+
     protected void assertInvalidFunction(String projection, String message)
     {
         try {
@@ -47,6 +61,17 @@ public abstract class AbstractTestFunctions
         catch (PrestoException e) {
             assertEquals(e.getErrorCode(), INVALID_FUNCTION_ARGUMENT.toErrorCode());
             assertEquals(e.getMessage(), message);
+        }
+    }
+
+    protected void assertInvalidFunction(String projection, SemanticErrorCode expectedErrorCode)
+    {
+        try {
+            evaluateInvalid(projection);
+            fail(format("Expected to throw %s exception", expectedErrorCode));
+        }
+        catch (SemanticException e) {
+            assertEquals(e.getCode(), expectedErrorCode);
         }
     }
 
@@ -75,7 +100,7 @@ public abstract class AbstractTestFunctions
     protected void registerScalar(Class<?> clazz)
     {
         Metadata metadata = functionAssertions.getMetadata();
-        List<ParametricFunction> functions = new FunctionListBuilder(metadata.getTypeManager())
+        List<SqlFunction> functions = new FunctionListBuilder(metadata.getTypeManager())
                 .scalar(clazz)
                 .getFunctions();
         metadata.getFunctionRegistry().addFunctions(functions);

@@ -13,9 +13,10 @@
  */
 package com.facebook.presto.hive;
 
+import com.facebook.presto.block.BlockSerdeUtil;
 import com.facebook.presto.spi.ConnectorPageSource;
-import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.RecordCursor;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.DateType;
@@ -28,11 +29,15 @@ import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
 import com.facebook.presto.type.ArrayType;
+import com.facebook.presto.type.MapType;
+import com.facebook.presto.type.RowType;
 import com.facebook.presto.type.TypeRegistry;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
+import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -66,28 +71,27 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
-import static com.facebook.presto.hive.HiveTestUtils.arraySliceOf;
-import static com.facebook.presto.hive.HiveTestUtils.mapSliceOf;
-import static com.facebook.presto.hive.HiveTestUtils.rowSliceOf;
-import static com.facebook.presto.hive.HiveType.getType;
+import static com.facebook.presto.hive.HiveTestUtils.SESSION;
 import static com.facebook.presto.hive.HiveUtil.isStructuralType;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.testing.MaterializedResult.materializeSourceDataStream;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.tests.StructuralTestUtil.arrayBlockOf;
+import static com.facebook.presto.tests.StructuralTestUtil.mapBlockOf;
+import static com.facebook.presto.tests.StructuralTestUtil.rowBlockOf;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.transform;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardListObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardMapObjectInspector;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardStructObjectInspector;
@@ -111,8 +115,6 @@ import static org.testng.Assert.assertTrue;
 @Test(groups = "hive")
 public abstract class AbstractTestHiveFileFormats
 {
-    private static final ConnectorSession SESSION = new ConnectorSession("user", UTC_KEY, ENGLISH, System.currentTimeMillis(), null);
-
     private static final double EPSILON = 0.001;
     private static final TypeManager TYPE_MANAGER = new TypeRegistry();
 
@@ -168,50 +170,50 @@ public abstract class AbstractTestHiveFileFormats
             .add(new TestColumn("t_map_string",
                     getStandardMapObjectInspector(javaStringObjectInspector, javaStringObjectInspector),
                     ImmutableMap.of("test", "test"),
-                    mapSliceOf(VARCHAR, VARCHAR, "test", "test")))
-            .add(new TestColumn("t_map_tinyint", getStandardMapObjectInspector(javaByteObjectInspector, javaByteObjectInspector), ImmutableMap.of((byte) 1, (byte) 1), mapSliceOf(BIGINT, BIGINT, 1, 1)))
+                    mapBlockOf(VARCHAR, VARCHAR, "test", "test")))
+            .add(new TestColumn("t_map_tinyint", getStandardMapObjectInspector(javaByteObjectInspector, javaByteObjectInspector), ImmutableMap.of((byte) 1, (byte) 1), mapBlockOf(BIGINT, BIGINT, 1, 1)))
             .add(new TestColumn("t_map_smallint",
                     getStandardMapObjectInspector(javaShortObjectInspector, javaShortObjectInspector),
                     ImmutableMap.of((short) 2, (short) 2),
-                    mapSliceOf(BIGINT, BIGINT, 2, 2)))
-            .add(new TestColumn("t_map_null_key", getStandardMapObjectInspector(javaIntObjectInspector, javaIntObjectInspector), mapWithNullKey(), mapSliceOf(BIGINT, BIGINT, 2, 3)))
-            .add(new TestColumn("t_map_int", getStandardMapObjectInspector(javaIntObjectInspector, javaIntObjectInspector), ImmutableMap.of(3, 3), mapSliceOf(BIGINT, BIGINT, 3, 3)))
-            .add(new TestColumn("t_map_bigint", getStandardMapObjectInspector(javaLongObjectInspector, javaLongObjectInspector), ImmutableMap.of(4L, 4L), mapSliceOf(BIGINT, BIGINT, 4L, 4L)))
-            .add(new TestColumn("t_map_float", getStandardMapObjectInspector(javaFloatObjectInspector, javaFloatObjectInspector), ImmutableMap.of(5.0f, 5.0f), mapSliceOf(DOUBLE, DOUBLE, 5.0f, 5.0f)))
-            .add(new TestColumn("t_map_double", getStandardMapObjectInspector(javaDoubleObjectInspector, javaDoubleObjectInspector), ImmutableMap.of(6.0, 6.0), mapSliceOf(DOUBLE, DOUBLE, 6.0, 6.0)))
+                    mapBlockOf(BIGINT, BIGINT, 2, 2)))
+            .add(new TestColumn("t_map_null_key", getStandardMapObjectInspector(javaIntObjectInspector, javaIntObjectInspector), asMap(null, 0, 2, 3), mapBlockOf(BIGINT, BIGINT, 2, 3)))
+            .add(new TestColumn("t_map_int", getStandardMapObjectInspector(javaIntObjectInspector, javaIntObjectInspector), ImmutableMap.of(3, 3), mapBlockOf(BIGINT, BIGINT, 3, 3)))
+            .add(new TestColumn("t_map_bigint", getStandardMapObjectInspector(javaLongObjectInspector, javaLongObjectInspector), ImmutableMap.of(4L, 4L), mapBlockOf(BIGINT, BIGINT, 4L, 4L)))
+            .add(new TestColumn("t_map_float", getStandardMapObjectInspector(javaFloatObjectInspector, javaFloatObjectInspector), ImmutableMap.of(5.0f, 5.0f), mapBlockOf(DOUBLE, DOUBLE, 5.0f, 5.0f)))
+            .add(new TestColumn("t_map_double", getStandardMapObjectInspector(javaDoubleObjectInspector, javaDoubleObjectInspector), ImmutableMap.of(6.0, 6.0), mapBlockOf(DOUBLE, DOUBLE, 6.0, 6.0)))
             .add(new TestColumn("t_map_boolean",
                     getStandardMapObjectInspector(javaBooleanObjectInspector, javaBooleanObjectInspector),
                     ImmutableMap.of(true, true),
-                    mapSliceOf(BOOLEAN, BOOLEAN, true, true)))
+                    mapBlockOf(BOOLEAN, BOOLEAN, true, true)))
             .add(new TestColumn("t_map_date",
                     getStandardMapObjectInspector(javaDateObjectInspector, javaDateObjectInspector),
                     ImmutableMap.of(SQL_DATE, SQL_DATE),
-                    mapSliceOf(DateType.DATE, DateType.DATE, DATE_DAYS, DATE_DAYS)))
+                    mapBlockOf(DateType.DATE, DateType.DATE, DATE_DAYS, DATE_DAYS)))
             .add(new TestColumn("t_map_timestamp",
                     getStandardMapObjectInspector(javaTimestampObjectInspector, javaTimestampObjectInspector),
                     ImmutableMap.of(new Timestamp(TIMESTAMP), new Timestamp(TIMESTAMP)),
-                    mapSliceOf(TimestampType.TIMESTAMP, TimestampType.TIMESTAMP, TIMESTAMP, TIMESTAMP)))
-            .add(new TestColumn("t_array_empty", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of(), arraySliceOf(VARCHAR)))
-            .add(new TestColumn("t_array_string", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of("test"), arraySliceOf(VARCHAR, "test")))
-            .add(new TestColumn("t_array_tinyint", getStandardListObjectInspector(javaByteObjectInspector), ImmutableList.of((byte) 1), arraySliceOf(BIGINT, 1)))
-            .add(new TestColumn("t_array_smallint", getStandardListObjectInspector(javaShortObjectInspector), ImmutableList.of((short) 2), arraySliceOf(BIGINT, 2)))
-            .add(new TestColumn("t_array_int", getStandardListObjectInspector(javaIntObjectInspector), ImmutableList.of(3), arraySliceOf(BIGINT, 3)))
-            .add(new TestColumn("t_array_bigint", getStandardListObjectInspector(javaLongObjectInspector), ImmutableList.of(4L), arraySliceOf(BIGINT, 4L)))
-            .add(new TestColumn("t_array_float", getStandardListObjectInspector(javaFloatObjectInspector), ImmutableList.of(5.0f), arraySliceOf(DOUBLE, 5.0f)))
-            .add(new TestColumn("t_array_double", getStandardListObjectInspector(javaDoubleObjectInspector), ImmutableList.of(6.0), arraySliceOf(DOUBLE, 6.0)))
-            .add(new TestColumn("t_array_boolean", getStandardListObjectInspector(javaBooleanObjectInspector), ImmutableList.of(true), arraySliceOf(BOOLEAN, true)))
+                    mapBlockOf(TimestampType.TIMESTAMP, TimestampType.TIMESTAMP, TIMESTAMP, TIMESTAMP)))
+            .add(new TestColumn("t_array_empty", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of(), arrayBlockOf(VARCHAR)))
+            .add(new TestColumn("t_array_string", getStandardListObjectInspector(javaStringObjectInspector), ImmutableList.of("test"), arrayBlockOf(VARCHAR, "test")))
+            .add(new TestColumn("t_array_tinyint", getStandardListObjectInspector(javaByteObjectInspector), ImmutableList.of((byte) 1), arrayBlockOf(BIGINT, 1)))
+            .add(new TestColumn("t_array_smallint", getStandardListObjectInspector(javaShortObjectInspector), ImmutableList.of((short) 2), arrayBlockOf(BIGINT, 2)))
+            .add(new TestColumn("t_array_int", getStandardListObjectInspector(javaIntObjectInspector), ImmutableList.of(3), arrayBlockOf(BIGINT, 3)))
+            .add(new TestColumn("t_array_bigint", getStandardListObjectInspector(javaLongObjectInspector), ImmutableList.of(4L), arrayBlockOf(BIGINT, 4L)))
+            .add(new TestColumn("t_array_float", getStandardListObjectInspector(javaFloatObjectInspector), ImmutableList.of(5.0f), arrayBlockOf(DOUBLE, 5.0f)))
+            .add(new TestColumn("t_array_double", getStandardListObjectInspector(javaDoubleObjectInspector), ImmutableList.of(6.0), arrayBlockOf(DOUBLE, 6.0)))
+            .add(new TestColumn("t_array_boolean", getStandardListObjectInspector(javaBooleanObjectInspector), ImmutableList.of(true), arrayBlockOf(BOOLEAN, true)))
             .add(new TestColumn("t_array_date",
                     getStandardListObjectInspector(javaDateObjectInspector),
                     ImmutableList.of(SQL_DATE),
-                    arraySliceOf(DateType.DATE, DATE_DAYS)))
+                    arrayBlockOf(DateType.DATE, DATE_DAYS)))
             .add(new TestColumn("t_array_timestamp",
                     getStandardListObjectInspector(javaTimestampObjectInspector),
                     ImmutableList.of(new Timestamp(TIMESTAMP)),
-                    arraySliceOf(TimestampType.TIMESTAMP, TIMESTAMP)))
+                    arrayBlockOf(TimestampType.TIMESTAMP, TIMESTAMP)))
             .add(new TestColumn("t_struct_bigint",
                     getStandardStructObjectInspector(ImmutableList.of("s_bigint"), ImmutableList.of(javaLongObjectInspector)),
                     new Long[] {1L},
-                    arraySliceOf(BIGINT, 1)))
+                    rowBlockOf(ImmutableList.of(BIGINT), 1)))
             .add(new TestColumn("t_complex",
                     getStandardMapObjectInspector(
                             javaStringObjectInspector,
@@ -223,12 +225,51 @@ public abstract class AbstractTestHiveFileFormats
                             )
                     ),
                     ImmutableMap.of("test", ImmutableList.<Object>of(new Integer[] {1})),
-                    mapSliceOf(VARCHAR, new ArrayType(new ArrayType(BIGINT)), "test", arraySliceOf(new ArrayType(BIGINT), arraySliceOf(BIGINT, 1)))
+                    mapBlockOf(VARCHAR, new ArrayType(new RowType(ImmutableList.of(BIGINT), Optional.empty())),
+                            "test", arrayBlockOf(new RowType(ImmutableList.of(BIGINT), Optional.empty()), rowBlockOf(ImmutableList.of(BIGINT), 1)))
             ))
+            .add(new TestColumn("t_map_null_key_complex_value",
+                    getStandardMapObjectInspector(
+                            javaStringObjectInspector,
+                            getStandardMapObjectInspector(javaLongObjectInspector, javaBooleanObjectInspector)
+                    ),
+                    asMap(null, ImmutableMap.of(15L, true), "k", ImmutableMap.of(16L, false)),
+                    mapBlockOf(VARCHAR, new MapType(BIGINT, BOOLEAN), "k", mapBlockOf(BIGINT, BOOLEAN, 16L, false))))
+            .add(new TestColumn("t_map_null_key_complex_key_value",
+                    getStandardMapObjectInspector(
+                            getStandardListObjectInspector(javaStringObjectInspector),
+                            getStandardMapObjectInspector(javaLongObjectInspector, javaBooleanObjectInspector)
+                    ),
+                    asMap(null, ImmutableMap.of(15L, true), ImmutableList.of("k", "ka"), ImmutableMap.of(16L, false)),
+                    mapBlockOf(new ArrayType(VARCHAR), new MapType(BIGINT, BOOLEAN), arrayBlockOf(VARCHAR, "k", "ka"), mapBlockOf(BIGINT, BOOLEAN, 16L, false))))
             .add(new TestColumn("t_struct_nested", getStandardStructObjectInspector(ImmutableList.of("struct_field"),
-                    ImmutableList.of(getStandardListObjectInspector(javaStringObjectInspector))), ImmutableList.of(ImmutableList.of("1", "2", "3")) , rowSliceOf(ImmutableList.of(new ArrayType(VARCHAR)), arraySliceOf(VARCHAR, "1", "2", "3"))))
+                    ImmutableList.of(getStandardListObjectInspector(javaStringObjectInspector))), ImmutableList.of(ImmutableList.of("1", "2", "3")), rowBlockOf(ImmutableList.of(new ArrayType(VARCHAR)), arrayBlockOf(VARCHAR, "1", "2", "3"))))
             .add(new TestColumn("t_struct_null", getStandardStructObjectInspector(ImmutableList.of("struct_field", "struct_field2"),
-                    ImmutableList.of(javaStringObjectInspector, javaStringObjectInspector)), Arrays.asList(null, null), rowSliceOf(ImmutableList.of(VARCHAR, VARCHAR), null, null)))
+                    ImmutableList.of(javaStringObjectInspector, javaStringObjectInspector)), Arrays.asList(null, null), rowBlockOf(ImmutableList.of(VARCHAR, VARCHAR), null, null)))
+            .add(new TestColumn("t_struct_non_nulls_after_nulls", getStandardStructObjectInspector(ImmutableList.of("struct_field1", "struct_field2"),
+                    ImmutableList.of(javaIntObjectInspector, javaStringObjectInspector)), Arrays.asList(null, "some string"), rowBlockOf(ImmutableList.of(BIGINT, VARCHAR), null, "some string")))
+            .add(new TestColumn("t_nested_struct_non_nulls_after_nulls",
+                    getStandardStructObjectInspector(
+                            ImmutableList.of("struct_field1", "struct_field2", "strict_field3"),
+                            ImmutableList.of(
+                                    javaIntObjectInspector,
+                                    javaStringObjectInspector,
+                                    getStandardStructObjectInspector(
+                                            ImmutableList.of("nested_struct_field1", "nested_struct_field2"),
+                                            ImmutableList.of(javaIntObjectInspector, javaStringObjectInspector)
+                                    )
+                            )
+                    ),
+                    Arrays.asList(null, "some string", Arrays.asList(null, "nested_string2")),
+                    rowBlockOf(
+                            ImmutableList.of(
+                                    BIGINT,
+                                    VARCHAR,
+                                    new RowType(ImmutableList.of(BIGINT, VARCHAR), Optional.empty())
+                            ),
+                            null, "some string", rowBlockOf(ImmutableList.of(BIGINT, VARCHAR), null, "nested_string2")
+                    )
+            ))
             .build();
 
     private static Map<Integer, Integer> mapWithNullKey()
@@ -236,6 +277,14 @@ public abstract class AbstractTestHiveFileFormats
         Map<Integer, Integer> map = new HashMap<>();
         map.put(null, 0);
         map.put(2, 3);
+        return map;
+    }
+
+    private static <K, V> Map<K, V> asMap(K k1, V v1, K k2, V v2)
+    {
+        Map<K, V> map = new HashMap<>();
+        map.put(k1, v1);
+        map.put(k2, v2);
         return map;
     }
 
@@ -247,16 +296,13 @@ public abstract class AbstractTestHiveFileFormats
             TestColumn testColumn = testColumns.get(i);
             int columnIndex = testColumn.isPartitionKey() ? -1 : nextHiveColumnIndex++;
 
-            ObjectInspector inspector = testColumn.getObjectInspector();
-            HiveType hiveType = HiveType.getHiveType(inspector);
-            Type type = getType(inspector, TYPE_MANAGER);
-
-            columns.add(new HiveColumnHandle("client_id", testColumn.getName(), i, hiveType, type.getTypeSignature(), columnIndex, testColumn.isPartitionKey()));
+            HiveType hiveType = HiveType.valueOf(testColumn.getObjectInspector().getTypeName());
+            columns.add(new HiveColumnHandle("client_id", testColumn.getName(), hiveType, hiveType.getTypeSignature(), columnIndex, testColumn.isPartitionKey()));
         }
         return columns;
     }
 
-    public FileSplit createTestFile(String filePath,
+    public static FileSplit createTestFile(String filePath,
             HiveOutputFormat<?, ?> outputFormat,
             @SuppressWarnings("deprecation") SerDe serDe,
             String compressionCodec,
@@ -341,7 +387,7 @@ public abstract class AbstractTestHiveFileFormats
                 TestColumn testColumn = testColumns.get(i);
 
                 Object fieldFromCursor;
-                Type type = getType(testColumn.getObjectInspector(), TYPE_MANAGER);
+                Type type = HiveType.valueOf(testColumn.getObjectInspector().getTypeName()).getType(TYPE_MANAGER);
                 if (cursor.isNull(i)) {
                     fieldFromCursor = null;
                 }
@@ -367,7 +413,7 @@ public abstract class AbstractTestHiveFileFormats
                     fieldFromCursor = cursor.getLong(i);
                 }
                 else if (isStructuralType(type)) {
-                    fieldFromCursor = cursor.getSlice(i);
+                    fieldFromCursor = cursor.getObject(i);
                 }
                 else {
                     throw new RuntimeException("unknown type");
@@ -384,9 +430,9 @@ public abstract class AbstractTestHiveFileFormats
                     assertEquals(fieldFromCursor, testColumn.getExpectedValue(), String.format("Wrong value for column %s", testColumn.getName()));
                 }
                 else {
-                    Slice expected = (Slice) testColumn.getExpectedValue();
-                    Slice actual = (Slice) fieldFromCursor;
-                    assertEquals(actual, expected, String.format("Wrong value for column %s", testColumn.getName()));
+                    Block expected = (Block) testColumn.getExpectedValue();
+                    Block actual = (Block) fieldFromCursor;
+                    assertBlockEquals(actual, expected, String.format("Wrong value for column %s", testColumn.getName()));
                 }
             }
         }
@@ -406,7 +452,7 @@ public abstract class AbstractTestHiveFileFormats
                     Object actualValue = row.getField(i);
                     Object expectedValue = testColumn.getExpectedValue();
                     if (actualValue == null) {
-                        assertEquals(null, expectedValue, String.format("Expected null for column %d", i));
+                        assertEquals(null, expectedValue, String.format("Expected non-null for column %d", i));
                     }
                     else if (testColumn.getObjectInspector().getTypeName().equals("float") ||
                             testColumn.getObjectInspector().getTypeName().equals("double")) {
@@ -434,8 +480,8 @@ public abstract class AbstractTestHiveFileFormats
                         assertEquals(actualValue, expectedValue, String.format("Wrong value for column %d", i));
                     }
                     else {
-                        BlockBuilder builder = type.createBlockBuilder(new BlockBuilderStatus(), 1, ((Slice) expectedValue).length());
-                        type.writeSlice(builder, (Slice) expectedValue);
+                        BlockBuilder builder = type.createBlockBuilder(new BlockBuilderStatus(), 1);
+                        type.writeObject(builder, expectedValue);
                         expectedValue = type.getObjectValue(SESSION, builder.build(), 0);
                         assertEquals(actualValue, expectedValue, String.format("Wrong value for column %s", testColumn.getName()));
                     }
@@ -445,6 +491,19 @@ public abstract class AbstractTestHiveFileFormats
         finally {
             pageSource.close();
         }
+    }
+
+    private static void assertBlockEquals(Block actual, Block expected, String message)
+    {
+        assertEquals(blockToSlice(actual), blockToSlice(expected), message);
+    }
+
+    private static Slice blockToSlice(Block block)
+    {
+        // This function is strictly for testing use only
+        SliceOutput sliceOutput = new DynamicSliceOutput(1000);
+        BlockSerdeUtil.writeBlock(sliceOutput, block.copyRegion(0, block.getPositionCount()));
+        return sliceOutput.slice();
     }
 
     public static final class TestColumn
@@ -462,8 +521,8 @@ public abstract class AbstractTestHiveFileFormats
 
         public TestColumn(String name, ObjectInspector objectInspector, Object writeValue, Object expectedValue, boolean partitionKey)
         {
-            this.name = checkNotNull(name, "name is null");
-            this.objectInspector = checkNotNull(objectInspector, "objectInspector is null");
+            this.name = requireNonNull(name, "name is null");
+            this.objectInspector = requireNonNull(objectInspector, "objectInspector is null");
             this.writeValue = writeValue;
             this.expectedValue = expectedValue;
             this.partitionKey = partitionKey;

@@ -25,6 +25,8 @@ public interface QueryExecution
 
     QueryInfo getQueryInfo();
 
+    QueryState getState();
+
     Duration waitForStateChange(QueryState currentState, Duration maxWait)
             throws InterruptedException;
 
@@ -33,6 +35,8 @@ public interface QueryExecution
     void setMemoryPool(VersionedMemoryPoolId poolId);
 
     long getTotalMemoryReservation();
+
+    Session getSession();
 
     void start();
 

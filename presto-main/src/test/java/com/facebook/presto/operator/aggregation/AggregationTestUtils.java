@@ -19,7 +19,7 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.testing.RunLengthEncodedBlock;
+import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -28,9 +28,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiConsumer;
+import java.util.stream.IntStream;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.util.Numbers.isFloatingNumber;
+import static com.facebook.presto.util.Numbers.isNan;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
@@ -40,13 +44,27 @@ public final class AggregationTestUtils
     {
     }
 
-    public static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, int positions, Block... blocks)
+    public static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, Block... blocks)
     {
+        int positions = blocks[0].getPositionCount();
+        for (int i = 1; i < blocks.length; i++) {
+            assertEquals(positions, blocks[i].getPositionCount(), "input blocks provided are not equal in position count");
+        }
         if (positions == 0) {
-            assertAggregation(function, confidence, expectedValue);
+            assertAggregation(function, confidence, expectedValue, new Page[] {});
+        }
+        else if (positions == 1) {
+            assertAggregation(function, confidence, expectedValue, new Page(positions, blocks));
         }
         else {
-            assertAggregation(function, confidence, expectedValue, new Page(positions, blocks));
+            int split = positions / 2; // [0, split - 1] goes to first list of blocks; [split, positions - 1] goes to second list of blocks.
+            Block[] blockArray1 = new Block[blocks.length];
+            Block[] blockArray2 = new Block[blocks.length];
+            for (int i = 0; i < blocks.length; i++) {
+                blockArray1[i] = blocks[i].getRegion(0, split);
+                blockArray2[i] = blocks[i].getRegion(split, positions - split);
+            }
+            assertAggregation(function, confidence, expectedValue, new Page(blockArray1), new Page(blockArray2));
         }
     }
 
@@ -79,10 +97,24 @@ public final class AggregationTestUtils
         return blockBuilder.build();
     }
 
+    public static Block getIntermediateBlock(GroupedAccumulator accumulator)
+    {
+        BlockBuilder blockBuilder = accumulator.getIntermediateType().createBlockBuilder(new BlockBuilderStatus(), 1000);
+        accumulator.evaluateIntermediate(0, blockBuilder);
+        return blockBuilder.build();
+    }
+
     public static Block getFinalBlock(Accumulator accumulator)
     {
         BlockBuilder blockBuilder = accumulator.getFinalType().createBlockBuilder(new BlockBuilderStatus(), 1000);
         accumulator.evaluateFinal(blockBuilder);
+        return blockBuilder.build();
+    }
+
+    public static Block getFinalBlock(GroupedAccumulator accumulator)
+    {
+        BlockBuilder blockBuilder = accumulator.getFinalType().createBlockBuilder(new BlockBuilderStatus(), 1000);
+        accumulator.evaluateFinal(0, blockBuilder);
         return blockBuilder.build();
     }
 
@@ -134,14 +166,25 @@ public final class AggregationTestUtils
         return Math.abs(expected - actual) <= error && !Double.isInfinite(error);
     }
 
-    public static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, Page... pages)
+    private static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, Page... pages)
     {
-        assertEquals(aggregation(function, confidence, pages), expectedValue);
-        assertEquals(partialAggregation(function, confidence, pages), expectedValue);
+        BiConsumer<Object, Object> equalAssertion = (actual, expected) -> {
+            assertEquals(actual, expected);
+        };
+        if (isFloatingNumber(expectedValue) && !isNan(expectedValue)) {
+            equalAssertion = (actual, expected) -> {
+                assertEquals((double) actual, (double) expected, 1e-10);
+            };
+        }
+
+        // This assertAggregation does not try to split up the page to test the correctness of combine function.
+        // Do not use this directly. Always use the other assertAggregation.
+        equalAssertion.accept(aggregation(function, confidence, pages), expectedValue);
+        equalAssertion.accept(partialAggregation(function, confidence, pages), expectedValue);
         if (pages.length > 0) {
-            assertEquals(groupedAggregation(function, confidence, pages), expectedValue);
-            assertEquals(groupedPartialAggregation(function, confidence, pages), expectedValue);
-            assertEquals(distinctAggregation(function, confidence, pages), expectedValue);
+            equalAssertion.accept(groupedAggregation(function, confidence, pages), expectedValue);
+            equalAssertion.accept(groupedPartialAggregation(function, confidence, pages), expectedValue);
+            equalAssertion.accept(distinctAggregation(function, confidence, pages), expectedValue);
         }
     }
 
@@ -236,22 +279,24 @@ public final class AggregationTestUtils
     public static Object partialAggregation(InternalAggregationFunction function, double confidence, int[] args, Page... pages)
     {
         AccumulatorFactory factory = function.bind(Ints.asList(args), Optional.empty(), Optional.empty(), confidence);
-        Accumulator partialAggregation = factory.createAccumulator();
-        for (Page page : pages) {
-            if (page.getPositionCount() > 0) {
-                partialAggregation.addInput(page);
-            }
-        }
-
-        Block partialBlock = getIntermediateBlock(partialAggregation);
-
         Accumulator finalAggregation = factory.createIntermediateAccumulator();
+
         // Test handling of empty intermediate blocks
         Accumulator emptyAggregation = factory.createAccumulator();
         Block emptyBlock = getIntermediateBlock(emptyAggregation);
 
         finalAggregation.addIntermediate(emptyBlock);
-        finalAggregation.addIntermediate(partialBlock);
+
+        for (Page page : pages) {
+            Accumulator partialAggregation = factory.createAccumulator();
+            if (page.getPositionCount() > 0) {
+                partialAggregation.addInput(page);
+            }
+            Block partialBlock = getIntermediateBlock(partialAggregation);
+            finalAggregation.addIntermediate(partialBlock);
+        }
+
+        finalAggregation.addIntermediate(emptyBlock);
 
         Block finalBlock = getFinalBlock(finalAggregation);
         return BlockAssertions.getOnlyValue(finalAggregation.getFinalType(), finalBlock);
@@ -313,24 +358,20 @@ public final class AggregationTestUtils
     public static Object groupedPartialAggregation(InternalAggregationFunction function, double confidence, int[] args, Page... pages)
     {
         AccumulatorFactory factory = function.bind(Ints.asList(args), Optional.empty(), Optional.empty(), confidence);
-        GroupedAccumulator partialAggregation = factory.createGroupedAccumulator();
-        for (Page page : pages) {
-            partialAggregation.addInput(createGroupByIdBlock(0, page.getPositionCount()), page);
-        }
-
-        BlockBuilder partialOut = partialAggregation.getIntermediateType().createBlockBuilder(new BlockBuilderStatus(), 1);
-        partialAggregation.evaluateIntermediate(0, partialOut);
-        Block partialBlock = partialOut.build();
-
         GroupedAccumulator finalAggregation = factory.createGroupedIntermediateAccumulator();
+
         // Add an empty block to test the handling of empty intermediates
         GroupedAccumulator emptyAggregation = factory.createGroupedAccumulator();
-        BlockBuilder emptyOut = emptyAggregation.getIntermediateType().createBlockBuilder(new BlockBuilderStatus(), 1);
-        emptyAggregation.evaluateIntermediate(0, emptyOut);
-        Block emptyBlock = emptyOut.build();
+        Block emptyBlock = getIntermediateBlock(emptyAggregation);
+
         finalAggregation.addIntermediate(createGroupByIdBlock(0, emptyBlock.getPositionCount()), emptyBlock);
 
-        finalAggregation.addIntermediate(createGroupByIdBlock(0, partialBlock.getPositionCount()), partialBlock);
+        for (Page page : pages) {
+            GroupedAccumulator partialAggregation = factory.createGroupedAccumulator();
+            partialAggregation.addInput(createGroupByIdBlock(0, page.getPositionCount()), page);
+            Block partialBlock = getIntermediateBlock(partialAggregation);
+            finalAggregation.addIntermediate(createGroupByIdBlock(0, partialBlock.getPositionCount()), partialBlock);
+        }
 
         finalAggregation.addIntermediate(createGroupByIdBlock(0, emptyBlock.getPositionCount()), emptyBlock);
 
@@ -419,5 +460,10 @@ public final class AggregationTestUtils
         BlockBuilder out = groupedAggregation.getFinalType().createBlockBuilder(new BlockBuilderStatus(), 1);
         groupedAggregation.evaluateFinal(groupId, out);
         return BlockAssertions.getOnlyValue(groupedAggregation.getFinalType(), out.build());
+    }
+
+    public static double[] constructDoublePrimitiveArray(int start, int length)
+    {
+        return IntStream.range(start, start + length).asDoubleStream().toArray();
     }
 }

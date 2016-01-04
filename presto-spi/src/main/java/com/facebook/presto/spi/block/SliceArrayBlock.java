@@ -15,17 +15,32 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
+import io.airlift.slice.Slices;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Arrays;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+
+import static com.facebook.presto.spi.block.BlockValidationUtil.checkValidPositions;
 
 public class SliceArrayBlock
         extends AbstractVariableWidthBlock
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(SliceArrayBlock.class).instanceSize();
+
     private final int positionCount;
     private final Slice[] values;
     private final int sizeInBytes;
+    private final int retainedSizeInBytes;
 
     public SliceArrayBlock(int positionCount, Slice[] values)
+    {
+        this(positionCount, values, false);
+    }
+
+    public SliceArrayBlock(int positionCount, Slice[] values, boolean valueSlicesAreDistinct)
     {
         this.positionCount = positionCount;
 
@@ -35,9 +50,12 @@ public class SliceArrayBlock
         this.values = values;
 
         sizeInBytes = getSliceArraySizeInBytes(values);
+
+        // if values are distinct, use the already computed value
+        retainedSizeInBytes = INSTANCE_SIZE + (valueSlicesAreDistinct ? sizeInBytes : getSliceArrayRetainedSizeInBytes(values));
     }
 
-    Slice[] getValues()
+    public Slice[] getValues()
     {
         return values;
     }
@@ -67,6 +85,20 @@ public class SliceArrayBlock
     }
 
     @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        checkValidPositions(positions, positionCount);
+
+        Slice[] newValues = new Slice[positions.size()];
+        for (int i = 0; i < positions.size(); i++) {
+            if (!isEntryNull(positions.get(i))) {
+                newValues[i] = Slices.copyOf(values[positions.get(i)]);
+            }
+        }
+        return new SliceArrayBlock(positions.size(), newValues);
+    }
+
+    @Override
     public int getPositionCount()
     {
         return positionCount;
@@ -85,6 +117,12 @@ public class SliceArrayBlock
     }
 
     @Override
+    public int getRetainedSizeInBytes()
+    {
+        return retainedSizeInBytes;
+    }
+
+    @Override
     public Block getRegion(int positionOffset, int length)
     {
         int positionCount = getPositionCount();
@@ -97,6 +135,58 @@ public class SliceArrayBlock
     }
 
     @Override
+    public Block copyRegion(int positionOffset, int length)
+    {
+        int positionCount = getPositionCount();
+        if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
+            throw new IndexOutOfBoundsException("Invalid position " + positionOffset + " in block with " + positionCount + " positions");
+        }
+
+        return new SliceArrayBlock(length, deepCopyAndCompact(values, positionOffset, length));
+    }
+
+    static Slice[] deepCopyAndCompactDictionary(Slice[] values, int[] ids, int positionOffset, int length)
+    {
+        Slice[] newValues = new Slice[length];
+        // Compact the slices. Use an IdentityHashMap because this could be very expensive otherwise.
+        Map<Slice, Slice> distinctValues = new IdentityHashMap<>();
+        for (int i = positionOffset; i < positionOffset + length; i++) {
+            Slice slice = values[ids[i]];
+            if (slice == null) {
+                continue;
+            }
+
+            Slice distinct = distinctValues.get(slice);
+            if (distinct == null) {
+                distinct = Slices.copyOf(slice);
+                distinctValues.put(slice, distinct);
+            }
+            newValues[i] = distinct;
+        }
+        return newValues;
+    }
+
+    static Slice[] deepCopyAndCompact(Slice[] values, int positionOffset, int length)
+    {
+        Slice[] newValues = Arrays.copyOfRange(values, positionOffset, positionOffset + length);
+        // Compact the slices. Use an IdentityHashMap because this could be very expensive otherwise.
+        Map<Slice, Slice> distinctValues = new IdentityHashMap<>();
+        for (int i = 0; i < newValues.length; i++) {
+            Slice slice = newValues[i];
+            if (slice == null) {
+                continue;
+            }
+            Slice distinct = distinctValues.get(slice);
+            if (distinct == null) {
+                distinct = Slices.copyOf(slice);
+                distinctValues.put(slice, distinct);
+            }
+            newValues[i] = distinct;
+        }
+        return newValues;
+    }
+
+    @Override
     public String toString()
     {
         StringBuilder sb = new StringBuilder("SliceArrayBlock{");
@@ -105,12 +195,27 @@ public class SliceArrayBlock
         return sb.toString();
     }
 
-    static int getSliceArraySizeInBytes(Slice[] values)
+    public static int getSliceArraySizeInBytes(Slice[] values)
     {
         long sizeInBytes = SizeOf.sizeOf(values);
         for (Slice value : values) {
             if (value != null) {
                 sizeInBytes += value.length();
+            }
+        }
+        if (sizeInBytes > Integer.MAX_VALUE) {
+            sizeInBytes = Integer.MAX_VALUE;
+        }
+        return (int) sizeInBytes;
+    }
+
+    static int getSliceArrayRetainedSizeInBytes(Slice[] values)
+    {
+        long sizeInBytes = SizeOf.sizeOf(values);
+        Map<Object, Boolean> uniqueRetained = new IdentityHashMap<>(values.length);
+        for (Slice value : values) {
+            if (value != null && value.getBase() != null && uniqueRetained.put(value.getBase(), true) == null) {
+                sizeInBytes += value.getRetainedSize();
             }
         }
         if (sizeInBytes > Integer.MAX_VALUE) {

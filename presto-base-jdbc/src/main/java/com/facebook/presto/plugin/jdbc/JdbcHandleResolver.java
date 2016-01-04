@@ -18,10 +18,11 @@ import com.facebook.presto.spi.ConnectorHandleResolver;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorTableHandle;
+import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 
 import javax.inject.Inject;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class JdbcHandleResolver
         implements ConnectorHandleResolver
@@ -31,7 +32,7 @@ public class JdbcHandleResolver
     @Inject
     public JdbcHandleResolver(JdbcConnectorId clientId)
     {
-        this.connectorId = checkNotNull(clientId, "clientId is null").toString();
+        this.connectorId = requireNonNull(clientId, "clientId is null").toString();
     }
 
     @Override
@@ -59,9 +60,21 @@ public class JdbcHandleResolver
     }
 
     @Override
+    public boolean canHandle(ConnectorTableLayoutHandle handle)
+    {
+        return (handle instanceof JdbcTableLayoutHandle) && ((JdbcTableLayoutHandle) handle).getTable().getConnectorId().equals(connectorId);
+    }
+
+    @Override
     public Class<? extends ConnectorTableHandle> getTableHandleClass()
     {
         return JdbcTableHandle.class;
+    }
+
+    @Override
+    public Class<? extends ConnectorTableLayoutHandle> getTableLayoutHandleClass()
+    {
+        return JdbcTableLayoutHandle.class;
     }
 
     @Override

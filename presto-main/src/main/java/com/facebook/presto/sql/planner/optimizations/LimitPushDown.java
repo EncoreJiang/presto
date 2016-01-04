@@ -23,9 +23,9 @@ import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
@@ -38,7 +38,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class LimitPushDown
         extends PlanOptimizer
@@ -46,13 +46,13 @@ public class LimitPushDown
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        checkNotNull(plan, "plan is null");
-        checkNotNull(session, "session is null");
-        checkNotNull(types, "types is null");
-        checkNotNull(symbolAllocator, "symbolAllocator is null");
-        checkNotNull(idAllocator, "idAllocator is null");
+        requireNonNull(plan, "plan is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(types, "types is null");
+        requireNonNull(symbolAllocator, "symbolAllocator is null");
+        requireNonNull(idAllocator, "idAllocator is null");
 
-        return PlanRewriter.rewriteWith(new Rewriter(idAllocator), plan, null);
+        return SimplePlanRewriter.rewriteWith(new Rewriter(idAllocator), plan, null);
     }
 
     private static class LimitContext
@@ -71,13 +71,13 @@ public class LimitPushDown
     }
 
     private static class Rewriter
-            extends PlanRewriter<LimitContext>
+            extends SimplePlanRewriter<LimitContext>
     {
         private final PlanNodeIdAllocator idAllocator;
 
         private Rewriter(PlanNodeIdAllocator idAllocator)
         {
-            this.idAllocator = checkNotNull(idAllocator, "idAllocator is null");
+            this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
         }
 
         @Override

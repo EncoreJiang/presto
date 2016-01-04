@@ -22,13 +22,20 @@ import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.spi.type.DateType.DATE;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 
 public final class SequencePageBuilder
 {
     private SequencePageBuilder()
     {
+    }
+
+    public static Page createSequencePage(List<? extends Type> types, int length)
+    {
+        return createSequencePage(types, length, new int[types.size()]);
     }
 
     public static Page createSequencePage(List<? extends Type> types, int length, int... initialValues)
@@ -49,6 +56,37 @@ public final class SequencePageBuilder
             }
             else if (type.equals(BOOLEAN)) {
                 blocks[i] = BlockAssertions.createBooleanSequenceBlock(initialValue, initialValue + length);
+            }
+            else if (type.equals(DATE)) {
+                blocks[i] = BlockAssertions.createDateSequenceBlock(initialValue, initialValue + length);
+            }
+            else if (type.equals(TIMESTAMP)) {
+                blocks[i] = BlockAssertions.createTimestampSequenceBlock(initialValue, initialValue + length);
+            }
+            else {
+                throw new IllegalStateException("Unsupported type " + type);
+            }
+        }
+
+        return new Page(blocks);
+    }
+
+    public static Page createSequencePageWithDictionaryBlocks(List<? extends Type> types, int length)
+    {
+        return createSequencePageWithDictionaryBlocks(types, length, new int[types.size()]);
+    }
+
+    public static Page createSequencePageWithDictionaryBlocks(List<? extends Type> types, int length, int... initialValues)
+    {
+        Block[] blocks = new Block[initialValues.length];
+        for (int i = 0; i < blocks.length; i++) {
+            Type type = types.get(i);
+            int initialValue = initialValues[i];
+            if (type.equals(VARCHAR)) {
+                blocks[i] = BlockAssertions.createStringDictionaryBlock(initialValue, initialValue + length);
+            }
+            else if (type.equals(BIGINT)) {
+                blocks[i] = BlockAssertions.createLongDictionaryBlock(initialValue, initialValue + length);
             }
             else {
                 throw new IllegalStateException("Unsupported type " + type);

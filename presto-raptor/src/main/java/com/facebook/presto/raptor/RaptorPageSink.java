@@ -28,14 +28,15 @@ import com.google.common.primitives.Ints;
 import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import io.airlift.units.DataSize;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 
 public class RaptorPageSink
@@ -56,26 +57,29 @@ public class RaptorPageSink
             PageSorter pageSorter,
             StorageManager storageManager,
             JsonCodec<ShardInfo> shardInfoCodec,
+            long transactionId,
             List<Long> columnIds,
             List<Type> columnTypes,
             Optional<Long> sampleWeightColumnId,
             List<Long> sortColumnIds,
-            List<SortOrder> sortOrders)
+            List<SortOrder> sortOrders,
+            DataSize maxBufferSize)
     {
-        this.pageSorter = checkNotNull(pageSorter, "pageSorter is null");
-        this.columnTypes = ImmutableList.copyOf(checkNotNull(columnTypes, "columnTypes is null"));
+        this.pageSorter = requireNonNull(pageSorter, "pageSorter is null");
+        this.columnTypes = ImmutableList.copyOf(requireNonNull(columnTypes, "columnTypes is null"));
 
-        checkNotNull(storageManager, "storageManager is null");
-        this.storagePageSink = storageManager.createStoragePageSink(columnIds, columnTypes);
-        this.shardInfoCodec = checkNotNull(shardInfoCodec, "shardInfoCodec is null");
+        requireNonNull(storageManager, "storageManager is null");
+        this.storagePageSink = storageManager.createStoragePageSink(transactionId, columnIds, columnTypes);
+        this.shardInfoCodec = requireNonNull(shardInfoCodec, "shardInfoCodec is null");
 
-        checkNotNull(sampleWeightColumnId, "sampleWeightColumnId is null");
+        requireNonNull(sampleWeightColumnId, "sampleWeightColumnId is null");
         this.sampleWeightField = columnIds.indexOf(sampleWeightColumnId.orElse(-1L));
 
         this.sortFields = ImmutableList.copyOf(sortColumnIds.stream().map(columnIds::indexOf).collect(toList()));
-        this.sortOrders = ImmutableList.copyOf(checkNotNull(sortOrders, "sortOrders is null"));
+        this.sortOrders = ImmutableList.copyOf(requireNonNull(sortOrders, "sortOrders is null"));
 
-        this.pageBuffer = storageManager.createPageBuffer();
+        // allow only Integer.MAX_VALUE rows to be buffered as that is the max rows we can sort
+        this.pageBuffer = new PageBuffer(maxBufferSize.toBytes(), Integer.MAX_VALUE);
     }
 
     @Override
@@ -95,7 +99,7 @@ public class RaptorPageSink
     }
 
     @Override
-    public Collection<Slice> commit()
+    public Collection<Slice> finish()
     {
         flushPages(pageBuffer.getPages());
         List<ShardInfo> shards = storagePageSink.commit();
@@ -108,9 +112,9 @@ public class RaptorPageSink
     }
 
     @Override
-    public void rollback()
+    public void abort()
     {
-        // TODO: clean up open resources
+        storagePageSink.rollback();
     }
 
     /**

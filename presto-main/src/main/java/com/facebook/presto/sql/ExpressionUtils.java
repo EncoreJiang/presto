@@ -16,9 +16,11 @@ package com.facebook.presto.sql;
 import com.facebook.presto.sql.planner.DependencyExtractor;
 import com.facebook.presto.sql.planner.DeterminismEvaluator;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.IsNullPredicate;
 import com.facebook.presto.sql.tree.LogicalBinaryExpression;
+import com.facebook.presto.sql.tree.NotExpression;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
@@ -28,15 +30,25 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 
+import java.util.ArrayDeque;
 import java.util.Arrays;
-import java.util.Iterator;
 import java.util.List;
+import java.util.Queue;
 
 import static com.facebook.presto.sql.tree.BooleanLiteral.FALSE_LITERAL;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.EQUAL;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.GREATER_THAN;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.GREATER_THAN_OR_EQUAL;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.IS_DISTINCT_FROM;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.LESS_THAN;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.LESS_THAN_OR_EQUAL;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Type.NOT_EQUAL;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.filter;
+import static com.google.common.collect.Lists.newArrayList;
+import static java.util.Objects.requireNonNull;
 
 public final class ExpressionUtils
 {
@@ -90,18 +102,16 @@ public final class ExpressionUtils
 
     public static Expression binaryExpression(LogicalBinaryExpression.Type type, Iterable<Expression> expressions)
     {
-        Preconditions.checkNotNull(type, "type is null");
-        Preconditions.checkNotNull(expressions, "expressions is null");
+        requireNonNull(type, "type is null");
+        requireNonNull(expressions, "expressions is null");
         Preconditions.checkArgument(!Iterables.isEmpty(expressions), "expressions is empty");
 
-        Iterator<Expression> iterator = expressions.iterator();
-
-        Expression result = iterator.next();
-        while (iterator.hasNext()) {
-            result = new LogicalBinaryExpression(type, result, iterator.next());
+        // build balanced tree for efficient recursive processing
+        Queue<Expression> queue = new ArrayDeque<>(newArrayList(expressions));
+        while (queue.size() > 1) {
+            queue.add(new LogicalBinaryExpression(type, queue.remove(), queue.remove()));
         }
-
-        return result;
+        return queue.remove();
     }
 
     public static Expression combineConjuncts(Expression... expressions)
@@ -116,7 +126,7 @@ public final class ExpressionUtils
 
     public static Expression combineConjunctsWithDefault(Iterable<Expression> expressions, Expression emptyDefault)
     {
-        Preconditions.checkNotNull(expressions, "expressions is null");
+        requireNonNull(expressions, "expressions is null");
 
         // Flatten all the expressions into their component conjuncts
         expressions = Iterables.concat(Iterables.transform(expressions, ExpressionUtils::extractConjuncts));
@@ -139,7 +149,7 @@ public final class ExpressionUtils
 
     public static Expression combineDisjunctsWithDefault(Iterable<Expression> expressions, Expression emptyDefault)
     {
-        Preconditions.checkNotNull(expressions, "expressions is null");
+        requireNonNull(expressions, "expressions is null");
 
         // Flatten all the expressions into their component disjuncts
         expressions = Iterables.concat(Iterables.transform(expressions, ExpressionUtils::extractDisjuncts));
@@ -161,6 +171,28 @@ public final class ExpressionUtils
                 .stream()
                 .filter((conjunct) -> !DeterminismEvaluator.isDeterministic(conjunct))
                 .collect(toImmutableList()));
+    }
+
+    public static ComparisonExpression.Type flipComparison(ComparisonExpression.Type type)
+    {
+        switch (type) {
+            case EQUAL:
+                return EQUAL;
+            case NOT_EQUAL:
+                return NOT_EQUAL;
+            case LESS_THAN:
+                return GREATER_THAN;
+            case LESS_THAN_OR_EQUAL:
+                return GREATER_THAN_OR_EQUAL;
+            case GREATER_THAN:
+                return LESS_THAN;
+            case GREATER_THAN_OR_EQUAL:
+                return LESS_THAN_OR_EQUAL;
+            case IS_DISTINCT_FROM:
+                return IS_DISTINCT_FROM;
+            default:
+                throw new IllegalArgumentException("Unsupported comparison: " + type);
+        }
     }
 
     public static Function<Expression, Expression> expressionOrNullSymbols(final Predicate<Symbol>... nullSymbolScopes)
@@ -196,5 +228,37 @@ public final class ExpressionUtils
         Iterable<Expression> deterministicDisjuncts = ImmutableSet.copyOf(Iterables.filter(expressions, DeterminismEvaluator::isDeterministic));
 
         return Iterables.concat(nonDeterministicDisjuncts, deterministicDisjuncts);
+    }
+
+    private static ComparisonExpression.Type negate(ComparisonExpression.Type type)
+    {
+        switch (type) {
+            case EQUAL:
+                return NOT_EQUAL;
+            case NOT_EQUAL:
+                return EQUAL;
+            case LESS_THAN:
+                return GREATER_THAN_OR_EQUAL;
+            case LESS_THAN_OR_EQUAL:
+                return GREATER_THAN;
+            case GREATER_THAN:
+                return LESS_THAN_OR_EQUAL;
+            case GREATER_THAN_OR_EQUAL:
+                return LESS_THAN;
+            default:
+                throw new IllegalArgumentException("Unsupported comparison: " + type);
+        }
+    }
+
+    public static Expression normalize(Expression expression)
+    {
+        if (expression instanceof NotExpression) {
+            NotExpression not = (NotExpression) expression;
+            if (not.getValue() instanceof ComparisonExpression) {
+                ComparisonExpression comparison = (ComparisonExpression) not.getValue();
+                return new ComparisonExpression(negate(comparison.getType()), comparison.getLeft(), comparison.getRight());
+            }
+        }
+        return expression;
     }
 }

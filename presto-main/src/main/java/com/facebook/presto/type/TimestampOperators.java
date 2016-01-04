@@ -18,7 +18,6 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.StandardTypes;
 import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
 import org.joda.time.chrono.ISOChronology;
 
 import java.util.concurrent.TimeUnit;
@@ -38,7 +37,8 @@ import static com.facebook.presto.type.DateTimeOperators.modulo24Hour;
 import static com.facebook.presto.util.DateTimeUtils.parseTimestampWithoutTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.printTimestampWithoutTimeZone;
 import static com.facebook.presto.util.DateTimeZoneIndex.getChronology;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static io.airlift.slice.SliceUtf8.trim;
+import static io.airlift.slice.Slices.utf8Slice;
 
 public final class TimestampOperators
 {
@@ -134,7 +134,7 @@ public final class TimestampOperators
     @SqlType(StandardTypes.VARCHAR)
     public static Slice castToSlice(ConnectorSession session, @SqlType(StandardTypes.TIMESTAMP) long value)
     {
-        return Slices.copiedBuffer(printTimestampWithoutTimeZone(session.getTimeZoneKey(), value), UTF_8);
+        return utf8Slice(printTimestampWithoutTimeZone(session.getTimeZoneKey(), value));
     }
 
     @ScalarOperator(CAST)
@@ -142,7 +142,7 @@ public final class TimestampOperators
     public static long castFromSlice(ConnectorSession session, @SqlType(StandardTypes.VARCHAR) Slice value)
     {
         try {
-            return parseTimestampWithoutTimeZone(session.getTimeZoneKey(), value.toStringUtf8());
+            return parseTimestampWithoutTimeZone(session.getTimeZoneKey(), trim(value).toStringUtf8());
         }
         catch (IllegalArgumentException e) {
             throw new PrestoException(INVALID_CAST_ARGUMENT, e);

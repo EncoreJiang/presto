@@ -48,12 +48,11 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.regex.Pattern;
 
-import static com.facebook.presto.SystemSessionProperties.BIG_QUERY;
 import static com.facebook.presto.execution.QueuedExecution.createQueuedExecution;
 import static com.facebook.presto.spi.StandardErrorCode.USER_ERROR;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
 public class SqlQueryQueueManager
@@ -66,14 +65,12 @@ public class SqlQueryQueueManager
     @Inject
     public SqlQueryQueueManager(QueryManagerConfig config, ObjectMapper mapper, MBeanExporter mbeanExporter)
     {
-        checkNotNull(config, "config is null");
-        this.mbeanExporter = checkNotNull(mbeanExporter, "mbeanExporter is null");
+        requireNonNull(config, "config is null");
+        this.mbeanExporter = requireNonNull(mbeanExporter, "mbeanExporter is null");
 
         ImmutableList.Builder<QueryQueueRule> rules = ImmutableList.builder();
         if (config.getQueueConfigFile() == null) {
             QueryQueueDefinition global = new QueryQueueDefinition("global", config.getMaxConcurrentQueries(), config.getMaxQueuedQueries());
-            QueryQueueDefinition big = new QueryQueueDefinition("big", config.getMaxConcurrentBigQueries(), config.getMaxQueuedBigQueries());
-            rules.add(new QueryQueueRule(null, null, ImmutableMap.of(BIG_QUERY, Pattern.compile("true", Pattern.CASE_INSENSITIVE)), ImmutableList.of(big)));
             rules.add(new QueryQueueRule(null, null, ImmutableMap.of(), ImmutableList.of(global)));
         }
         else {
@@ -146,7 +143,7 @@ public class SqlQueryQueueManager
         GraphPath<String, DefaultEdge> shortestPath = floyd.getShortestPath(minDestination, minSource);
         List<String> pathVertexList = Graphs.getPathVertexList(shortestPath);
         // note: pathVertexList will be [a, a] instead of [a] when the shortest path is a loop edge
-        if (shortestPath.getStartVertex() != shortestPath.getEndVertex()) {
+        if (!Objects.equals(shortestPath.getStartVertex(), shortestPath.getEndVertex())) {
             pathVertexList.add(pathVertexList.get(0));
         }
         return pathVertexList;
@@ -155,7 +152,7 @@ public class SqlQueryQueueManager
     @Override
     public boolean submit(QueryExecution queryExecution, Executor executor, SqlQueryManagerStats stats)
     {
-        List<QueryQueue> queues = selectQueues(queryExecution.getQueryInfo().getSession(), executor);
+        List<QueryQueue> queues = selectQueues(queryExecution.getSession(), executor);
 
         for (QueryQueue queue : queues) {
             if (!queue.reserve(queryExecution)) {
@@ -165,7 +162,8 @@ public class SqlQueryQueueManager
             }
         }
 
-        return queues.get(0).enqueue(createQueuedExecution(queryExecution, queues.subList(1, queues.size()), executor, stats));
+        queues.get(0).enqueue(createQueuedExecution(queryExecution, queues.subList(1, queues.size()), executor, stats));
+        return true;
     }
 
     // Queues returned have already been created and added queryQueues
@@ -215,8 +213,8 @@ public class SqlQueryQueueManager
 
         private QueueKey(QueryQueueDefinition queue, String name)
         {
-            this.queue = checkNotNull(queue, "queue is null");
-            this.name = checkNotNull(name, "name is null");
+            this.queue = requireNonNull(queue, "queue is null");
+            this.name = requireNonNull(name, "name is null");
         }
 
         public QueryQueueDefinition getQueue()
@@ -261,8 +259,8 @@ public class SqlQueryQueueManager
                 @JsonProperty("queues") Map<String, QueueSpec> queues,
                 @JsonProperty("rules") List<RuleSpec> rules)
         {
-            this.queues = ImmutableMap.copyOf(checkNotNull(queues, "queues is null"));
-            this.rules = ImmutableList.copyOf(checkNotNull(rules, "rules is null"));
+            this.queues = ImmutableMap.copyOf(requireNonNull(queues, "queues is null"));
+            this.rules = ImmutableList.copyOf(requireNonNull(rules, "rules is null"));
         }
 
         public Map<String, QueueSpec> getQueues()

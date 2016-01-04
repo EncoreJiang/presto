@@ -45,9 +45,6 @@ Hive clusters, simply add another properties file to ``etc/catalog``
 with a different name (making sure it ends in ``.properties``). For
 example, if you name the property file ``sales.properties``, Presto
 will create a catalog named ``sales`` using the configured connector.
-If you are connecting to more than one Hive metastore, you can create
-any number of properties files configuring multiple instances of
-the Hive connector.
 
 HDFS Configuration
 ^^^^^^^^^^^^^^^^^^
@@ -70,22 +67,40 @@ Configuration Properties
 ------------------------
 
 ================================================== ============================================================ ==========
-Property Name                                      Description                                                  Example
+Property Name                                      Description                                                  Default
 ================================================== ============================================================ ==========
-``hive.metastore.uri``                             The URI of the Hive Metastore to connect to using            ``thrift://192.0.2.3:9083``
-                                                   the Thrift protocol. This property is required.
+``hive.metastore.uri``                             The URI(s) of the Hive metastore to connect to using the
+                                                   Thrift protocol. If multiple URIs are provided, the first
+                                                   URI is used by default and the rest of the URIs are
+                                                   fallback metastores. This property is required.
+                                                   Example: ``thrift://192.0.2.3:9083`` or
+                                                   ``thrift://192.0.2.3:9083,thrift://192.0.2.4:9083``
 
-``hive.config.resources``                          An optional comma-separated list of HDFS                     ``/etc/hdfs-site.xml``
+``hive.config.resources``                          An optional comma-separated list of HDFS
                                                    configuration files. These files must exist on the
                                                    machines running Presto. Only specify this if
                                                    absolutely necessary to access HDFS.
+                                                   Example: ``/etc/hdfs-site.xml``
 
-``hive.storage-format``                            The default file format used when creating new tables        ``RCBINARY``
+``hive.storage-format``                            The default file format used when creating new tables.       ``RCBINARY``
 
-``hive.force-local-scheduling``                    Force splits to be scheduled on the same node as the Hadoop  ``true``
+``hive.force-local-scheduling``                    Force splits to be scheduled on the same node as the Hadoop  ``false``
                                                    DataNode process serving the split data.  This is useful for
                                                    installations where Presto is collocated with every
                                                    DataNode.
+
+``hive.allow-drop-table``                          Allow the Hive connector to drop tables.                     ``false``
+
+``hive.allow-rename-table``                        Allow the Hive connector to rename tables.                   ``false``
+
+``hive.respect-table-format``                      Should new partitions be written using the existing table    ``true``
+                                                   format or the default Presto format?
+
+``hive.immutable-partitions``                      Can new data be inserted into existing partitions?           ``false``
+
+``hive.max-partitions-per-writers``                Maximum number of partitions per writer.                     100
+
+``hive.s3.sse.enabled``                            Enable S3 server-side encryption.                            ``false``
 ================================================== ============================================================ ==========
 
 Querying Hive Tables

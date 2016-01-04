@@ -39,10 +39,10 @@ import java.util.concurrent.TimeUnit;
 
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.airlift.slice.Slices.wrappedBuffer;
+import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeZone.UTC;
 
 public class JdbcRecordCursor
@@ -61,14 +61,12 @@ public class JdbcRecordCursor
 
     public JdbcRecordCursor(JdbcClient jdbcClient, JdbcSplit split, List<JdbcColumnHandle> columnHandles)
     {
-        this.columnHandles = ImmutableList.copyOf(checkNotNull(columnHandles, "columnHandles is null"));
+        this.columnHandles = ImmutableList.copyOf(requireNonNull(columnHandles, "columnHandles is null"));
 
         String sql = jdbcClient.buildSql(split, columnHandles);
         try {
             connection = jdbcClient.getConnection(split);
-
-            statement = connection.createStatement();
-            statement.setFetchSize(1000);
+            statement = jdbcClient.getStatement(connection);
 
             log.debug("Executing: %s", sql);
             resultSet = statement.executeQuery(sql);
@@ -197,6 +195,12 @@ public class JdbcRecordCursor
     }
 
     @Override
+    public Object getObject(int field)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public boolean isNull(int field)
     {
         checkState(!closed, "cursor is closed");
@@ -219,12 +223,15 @@ public class JdbcRecordCursor
     @Override
     public void close()
     {
+        if (closed) {
+            return;
+        }
         closed = true;
 
         // use try with resources to close everything properly
-        try (ResultSet resultSet = this.resultSet;
+        try (Connection connection = this.connection;
                 Statement statement = this.statement;
-                Connection connection = this.connection) {
+                ResultSet resultSet = this.resultSet) {
             // do nothing
         }
         catch (SQLException e) {

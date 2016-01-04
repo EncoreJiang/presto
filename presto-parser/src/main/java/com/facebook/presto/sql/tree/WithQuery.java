@@ -15,9 +15,10 @@ package com.facebook.presto.sql.tree;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class WithQuery
         extends Node
@@ -28,8 +29,19 @@ public class WithQuery
 
     public WithQuery(String name, Query query, List<String> columnNames)
     {
-        this.name = QualifiedName.of(checkNotNull(name, "name is null")).getParts().get(0);
-        this.query = checkNotNull(query, "query is null");
+        this(Optional.empty(), name, query, columnNames);
+    }
+
+    public WithQuery(NodeLocation location, String name, Query query, List<String> columnNames)
+    {
+        this(Optional.of(location), name, query, columnNames);
+    }
+
+    private WithQuery(Optional<NodeLocation> location, String name, Query query, List<String> columnNames)
+    {
+        super(location);
+        this.name = QualifiedName.of(requireNonNull(name, "name is null")).getParts().get(0);
+        this.query = requireNonNull(query, "query is null");
         this.columnNames = columnNames;
     }
 

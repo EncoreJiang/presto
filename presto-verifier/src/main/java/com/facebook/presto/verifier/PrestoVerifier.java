@@ -51,10 +51,11 @@ public class PrestoVerifier
     public static void main(String[] args)
             throws Exception
     {
-        new PrestoVerifier().run(args);
+        int failed = new PrestoVerifier().run(args);
+        System.exit((failed > 0) ? 1 : 0);
     }
 
-    public void run(String[] args)
+    public int run(String[] args)
             throws Exception
     {
         if (args.length > 0) {
@@ -103,7 +104,7 @@ public class PrestoVerifier
 
             // TODO: construct this with Guice
             Verifier verifier = new Verifier(System.out, config, eventClients);
-            verifier.run(queries);
+            return verifier.run(queries);
         }
         finally {
             injector.getInstance(LifeCycleManager.class).stop();
@@ -176,17 +177,23 @@ public class PrestoVerifier
                     Query test = new Query(
                             Optional.ofNullable(config.getTestCatalogOverride()).orElse(input.getTest().getCatalog()),
                             Optional.ofNullable(config.getTestSchemaOverride()).orElse(input.getTest().getSchema()),
+                            input.getTest().getPreQueries(),
                             input.getTest().getQuery(),
+                            input.getTest().getPostQueries(),
                             Optional.ofNullable(config.getTestUsernameOverride()).orElse(input.getTest().getUsername()),
                             Optional.ofNullable(config.getTestPasswordOverride()).orElse(
-                                    Optional.ofNullable(input.getTest().getPassword()).orElse(null)));
+                                    Optional.ofNullable(input.getTest().getPassword()).orElse(null)),
+                            input.getTest().getSessionProperties());
                     Query control = new Query(
                             Optional.ofNullable(config.getControlCatalogOverride()).orElse(input.getControl().getCatalog()),
                             Optional.ofNullable(config.getControlSchemaOverride()).orElse(input.getControl().getSchema()),
+                            input.getControl().getPreQueries(),
                             input.getControl().getQuery(),
+                            input.getControl().getPostQueries(),
                             Optional.ofNullable(config.getControlUsernameOverride()).orElse(input.getControl().getUsername()),
                             Optional.ofNullable(config.getControlPasswordOverride()).orElse(
-                                    Optional.ofNullable(input.getControl().getPassword()).orElse(null)));
+                                    Optional.ofNullable(input.getControl().getPassword()).orElse(null)),
+                            input.getControl().getSessionProperties());
                     return new QueryPair(input.getSuite(), input.getName(), test, control);
                 })
                 .collect(toImmutableList());

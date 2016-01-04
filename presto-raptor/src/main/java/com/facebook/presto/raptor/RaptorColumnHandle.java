@@ -20,14 +20,22 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static java.util.Objects.requireNonNull;
 
 public final class RaptorColumnHandle
         implements ColumnHandle
 {
     // This is intentionally not named "$sampleWeight" because column names are lowercase and case insensitive
     public static final String SAMPLE_WEIGHT_COLUMN_NAME = "$sample_weight";
+
+    // Generated rowId column for updates
+    private static final long SHARD_ROW_ID_COLUMN_ID = -1;
+    private static final String SHARD_ROW_ID_COLUMN_NAME = "$shard_row_id";
+
+    public static final long SHARD_UUID_COLUMN_ID = -2;
+    public static final String SHARD_UUID_COLUMN_NAME = "$shard_uuid";
 
     private final String connectorId;
     private final String columnName;
@@ -41,11 +49,10 @@ public final class RaptorColumnHandle
             @JsonProperty("columnId") long columnId,
             @JsonProperty("columnType") Type columnType)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null");
-        this.columnName = checkNotNull(columnName, "columnName is null");
-        checkArgument(columnId > 0, "columnId must be greater than zero");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+        this.columnName = requireNonNull(columnName, "columnName is null");
         this.columnId = columnId;
-        this.columnType = checkNotNull(columnType, "columnType is null");
+        this.columnType = requireNonNull(columnType, "columnType is null");
     }
 
     @JsonProperty
@@ -95,5 +102,35 @@ public final class RaptorColumnHandle
     public int hashCode()
     {
         return Objects.hash(columnId);
+    }
+
+    public boolean isShardRowId()
+    {
+        return isShardRowIdColumn(columnId);
+    }
+
+    public boolean isShardUuid()
+    {
+        return isShardUuidColumn(columnId);
+    }
+
+    public static boolean isShardRowIdColumn(long columnId)
+    {
+        return columnId == SHARD_ROW_ID_COLUMN_ID;
+    }
+
+    public static RaptorColumnHandle shardRowIdHandle(String connectorId)
+    {
+        return new RaptorColumnHandle(connectorId, SHARD_ROW_ID_COLUMN_NAME, SHARD_ROW_ID_COLUMN_ID, BIGINT);
+    }
+
+    public static boolean isShardUuidColumn(long columnId)
+    {
+        return columnId == SHARD_UUID_COLUMN_ID;
+    }
+
+    public static RaptorColumnHandle shardUuidColumnHandle(String connectorId)
+    {
+        return new RaptorColumnHandle(connectorId, SHARD_UUID_COLUMN_NAME, SHARD_UUID_COLUMN_ID, VARCHAR);
     }
 }

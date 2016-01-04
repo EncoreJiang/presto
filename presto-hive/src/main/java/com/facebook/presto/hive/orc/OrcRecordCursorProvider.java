@@ -19,7 +19,7 @@ import com.facebook.presto.hive.HivePartitionKey;
 import com.facebook.presto.hive.HiveRecordCursor;
 import com.facebook.presto.hive.HiveRecordCursorProvider;
 import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Lists;
@@ -41,7 +41,7 @@ import java.util.Properties;
 
 import static com.facebook.presto.hive.HiveUtil.isDeserializerClass;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class OrcRecordCursorProvider
         implements HiveRecordCursorProvider
@@ -111,7 +111,7 @@ public class OrcRecordCursorProvider
 
     private static boolean[] findIncludedColumns(List<Type> types, List<HiveColumnHandle> columns)
     {
-        checkNotNull(types, "types is null");
+        requireNonNull(types, "types is null");
         checkArgument(!types.isEmpty(), "types is empty");
 
         boolean[] includes = new boolean[types.size()];

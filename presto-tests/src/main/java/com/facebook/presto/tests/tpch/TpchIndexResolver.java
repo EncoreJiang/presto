@@ -14,36 +14,41 @@
 package com.facebook.presto.tests.tpch;
 
 import com.facebook.presto.spi.ColumnHandle;
+import com.facebook.presto.spi.ConnectorIndex;
 import com.facebook.presto.spi.ConnectorIndexHandle;
 import com.facebook.presto.spi.ConnectorIndexResolver;
 import com.facebook.presto.spi.ConnectorResolvedIndex;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableHandle;
-import com.facebook.presto.spi.ConnectorIndex;
 import com.facebook.presto.spi.RecordSet;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.split.MappedRecordSet;
 import com.facebook.presto.tpch.TpchColumnHandle;
 import com.facebook.presto.tpch.TpchTableHandle;
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.facebook.presto.util.Types.checkType;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.any;
 import static com.google.common.collect.Iterables.transform;
+import static java.util.Objects.requireNonNull;
 
 public class TpchIndexResolver
         implements ConnectorIndexResolver
@@ -53,18 +58,27 @@ public class TpchIndexResolver
 
     public TpchIndexResolver(String connectorId, TpchIndexedData indexedData)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null");
-        this.indexedData = checkNotNull(indexedData, "indexedData is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+        this.indexedData = requireNonNull(indexedData, "indexedData is null");
     }
 
     @Override
-    public ConnectorResolvedIndex resolveIndex(ConnectorTableHandle tableHandle, Set<ColumnHandle> indexableColumns, TupleDomain<ColumnHandle> tupleDomain)
+    public ConnectorResolvedIndex resolveIndex(
+            ConnectorSession session,
+            ConnectorTableHandle tableHandle,
+            Set<ColumnHandle> indexableColumns,
+            TupleDomain<ColumnHandle> tupleDomain)
     {
         TpchTableHandle tpchTableHandle = checkType(tableHandle, TpchTableHandle.class, "tableHandle");
 
         // Keep the fixed values that don't overlap with the indexableColumns
         // Note: technically we could more efficiently utilize the overlapped columns, but this way is simpler for now
-        Map<ColumnHandle, Comparable<?>> fixedValues = Maps.filterKeys(tupleDomain.extractFixedValues(), not(in(indexableColumns)));
+
+        Map<ColumnHandle, NullableValue> fixedValues = TupleDomain.extractFixedValues(tupleDomain).orElse(ImmutableMap.of())
+                .entrySet().stream()
+                .filter(entry -> !indexableColumns.contains(entry.getKey()))
+                .filter(entry -> !entry.getValue().isNull()) // strip nulls since meaningless in index join lookups
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         // determine all columns available for index lookup
         ImmutableSet.Builder<String> builder = ImmutableSet.builder();
@@ -79,31 +93,29 @@ public class TpchIndexResolver
 
         TupleDomain<ColumnHandle> filteredTupleDomain = tupleDomain;
         if (!tupleDomain.isNone()) {
-            filteredTupleDomain = TupleDomain.withColumnDomains(Maps.filterKeys(tupleDomain.getDomains(), not(in(fixedValues.keySet()))));
+            filteredTupleDomain = TupleDomain.withColumnDomains(Maps.filterKeys(tupleDomain.getDomains().get(), not(in(fixedValues.keySet()))));
         }
-        return new ConnectorResolvedIndex(new TpchIndexHandle(connectorId, tpchTableHandle.getTableName(), tpchTableHandle.getScaleFactor(), lookupColumnNames, TupleDomain.withFixedValues(fixedValues)), filteredTupleDomain);
+        return new ConnectorResolvedIndex(new TpchIndexHandle(connectorId, tpchTableHandle.getTableName(), tpchTableHandle.getScaleFactor(), lookupColumnNames, TupleDomain.fromFixedValues(fixedValues)), filteredTupleDomain);
     }
 
     @Override
-    public ConnectorIndex getIndex(ConnectorIndexHandle indexHandle, List<ColumnHandle> lookupSchema, List<ColumnHandle> outputSchema)
+    public ConnectorIndex getIndex(ConnectorSession session, ConnectorIndexHandle indexHandle, List<ColumnHandle> lookupSchema, List<ColumnHandle> outputSchema)
     {
         TpchIndexHandle tpchIndexHandle = checkType(indexHandle, TpchIndexHandle.class, "indexHandle");
 
-        Map<ColumnHandle, Comparable<?>> fixedValues = tpchIndexHandle.getFixedValues().extractFixedValues();
+        Map<ColumnHandle, NullableValue> fixedValues = TupleDomain.extractFixedValues(tpchIndexHandle.getFixedValues()).get();
         checkArgument(!any(lookupSchema, in(fixedValues.keySet())), "Lookup columnHandles are not expected to overlap with the fixed value predicates");
 
         // Establish an order for the fixedValues
         List<ColumnHandle> fixedValueColumns = ImmutableList.copyOf(fixedValues.keySet());
 
         // Extract the fixedValues as their raw values and types
-        ImmutableList.Builder<Object> valueBuilder = ImmutableList.builder();
-        ImmutableList.Builder<Type> typeBuilder = ImmutableList.builder();
+        List<Object> rawFixedValues = new ArrayList<>(fixedValueColumns.size());
+        List<Type> rawFixedTypes = new ArrayList<>(fixedValueColumns.size());
         for (ColumnHandle fixedValueColumn : fixedValueColumns) {
-            valueBuilder.add(fixedValues.get(fixedValueColumn));
-            typeBuilder.add(((TpchColumnHandle) fixedValueColumn).getType());
+            rawFixedValues.add(fixedValues.get(fixedValueColumn).getValue());
+            rawFixedTypes.add(((TpchColumnHandle) fixedValueColumn).getType());
         }
-        final List<Object> rawFixedValues = valueBuilder.build();
-        final List<Type> rawFixedTypes = typeBuilder.build();
 
         // Establish the schema after we append the fixed values to the lookup keys.
         List<ColumnHandle> finalLookupSchema = ImmutableList.<ColumnHandle>builder()
@@ -117,25 +129,11 @@ public class TpchIndexResolver
 
         // Compute how to map from the final lookup schema to the table index key order
         final List<Integer> keyRemap = computeRemap(handleToNames(finalLookupSchema), table.getKeyColumns());
-        Function<RecordSet, RecordSet> keyFormatter = new Function<RecordSet, RecordSet>()
-        {
-            @Override
-            public RecordSet apply(RecordSet key)
-            {
-                return new MappedRecordSet(new AppendingRecordSet(key, rawFixedValues, rawFixedTypes), keyRemap);
-            }
-        };
+        Function<RecordSet, RecordSet> keyFormatter = key -> new MappedRecordSet(new AppendingRecordSet(key, rawFixedValues, rawFixedTypes), keyRemap);
 
         // Compute how to map from the output of the indexed data to the expected output schema
         final List<Integer> outputRemap = computeRemap(table.getOutputColumns(), handleToNames(outputSchema));
-        Function<RecordSet, RecordSet> outputFormatter = new Function<RecordSet, RecordSet>()
-        {
-            @Override
-            public RecordSet apply(RecordSet output)
-            {
-                return new MappedRecordSet(output, outputRemap);
-            }
-        };
+        Function<RecordSet, RecordSet> outputFormatter = output -> new MappedRecordSet(output, outputRemap);
 
         return new TpchConnectorIndex(keyFormatter, outputFormatter, table);
     }
@@ -158,13 +156,6 @@ public class TpchIndexResolver
 
     private static Function<ColumnHandle, String> columnNameGetter()
     {
-        return new Function<ColumnHandle, String>()
-        {
-            @Override
-            public String apply(ColumnHandle columnHandle)
-            {
-                return checkType(columnHandle, TpchColumnHandle.class, "columnHandle").getColumnName();
-            }
-        };
+        return columnHandle -> checkType(columnHandle, TpchColumnHandle.class, "columnHandle").getColumnName();
     }
 }

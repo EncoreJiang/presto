@@ -15,13 +15,15 @@ package com.facebook.presto.hive;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorHandleResolver;
+import com.facebook.presto.spi.ConnectorInsertTableHandle;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.ConnectorTableHandle;
+import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 
 import javax.inject.Inject;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class HiveHandleResolver
         implements ConnectorHandleResolver
@@ -31,13 +33,18 @@ public class HiveHandleResolver
     @Inject
     public HiveHandleResolver(HiveConnectorId connectorId)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null").toString();
+        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
     }
 
     @Override
     public boolean canHandle(ConnectorTableHandle tableHandle)
     {
         return (tableHandle instanceof HiveTableHandle) && ((HiveTableHandle) tableHandle).getClientId().equals(connectorId);
+    }
+
+    public boolean canHandle(ConnectorTableLayoutHandle handle)
+    {
+        return handle instanceof HiveTableLayoutHandle && ((HiveTableLayoutHandle) handle).getClientId().equals(connectorId);
     }
 
     @Override
@@ -59,9 +66,21 @@ public class HiveHandleResolver
     }
 
     @Override
+    public boolean canHandle(ConnectorInsertTableHandle tableHandle)
+    {
+        return (tableHandle instanceof HiveInsertTableHandle) && ((HiveInsertTableHandle) tableHandle).getClientId().equals(connectorId);
+    }
+
+    @Override
     public Class<? extends ConnectorTableHandle> getTableHandleClass()
     {
         return HiveTableHandle.class;
+    }
+
+    @Override
+    public Class<? extends ConnectorTableLayoutHandle> getTableLayoutHandleClass()
+    {
+        return HiveTableLayoutHandle.class;
     }
 
     @Override
@@ -80,5 +99,11 @@ public class HiveHandleResolver
     public Class<? extends ConnectorOutputTableHandle> getOutputTableHandleClass()
     {
         return HiveOutputTableHandle.class;
+    }
+
+    @Override
+    public Class<? extends ConnectorInsertTableHandle> getInsertTableHandleClass()
+    {
+        return HiveInsertTableHandle.class;
     }
 }

@@ -23,15 +23,16 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.tpch.TpchTable;
 import org.apache.hadoop.hive.metastore.api.Database;
+import org.apache.hadoop.hive.metastore.api.PrincipalType;
+import org.jetbrains.annotations.NotNull;
 import org.joda.time.DateTimeZone;
 
 import java.io.File;
 import java.util.Map;
 
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.tests.QueryAssertions.copyTpchTables;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCHEMA_NAME;
-import static java.util.Locale.ENGLISH;
 import static org.testng.Assert.assertEquals;
 
 public final class HiveQueryRunner
@@ -40,7 +41,8 @@ public final class HiveQueryRunner
     {
     }
 
-    private static final String TPCH_SCHEMA = "tpch";
+    public static final String HIVE_CATALOG = "hive";
+    public static final String TPCH_SCHEMA = "tpch";
     private static final String TPCH_SAMPLED_SCHEMA = "tpch_sampled";
     private static final DateTimeZone TIME_ZONE = DateTimeZone.forID("Asia/Kathmandu");
 
@@ -64,19 +66,22 @@ public final class HiveQueryRunner
             queryRunner.installPlugin(new SampledTpchPlugin());
             queryRunner.createCatalog("tpch_sampled", "tpch_sampled");
 
-            File baseDir = queryRunner.getCoordinator().getBaseDataDir().toFile();
-            InMemoryHiveMetastore metastore = new InMemoryHiveMetastore();
-            metastore.createDatabase(new Database("tpch", null, new File(baseDir, "tpch").toURI().toString(), null));
-            metastore.createDatabase(new Database("tpch_sampled", null, new File(baseDir, "tpch_sampled").toURI().toString(), null));
+            File baseDir = queryRunner.getCoordinator().getBaseDataDir().resolve("hive_data").toFile();
+            InMemoryHiveMetastore metastore = new InMemoryHiveMetastore(baseDir);
+            metastore.createDatabase(createDatabaseMetastoreObject(baseDir, "tpch"));
+            metastore.createDatabase(createDatabaseMetastoreObject(baseDir, "tpch_sampled"));
 
-            queryRunner.installPlugin(new HivePlugin("hive", metastore));
+            queryRunner.installPlugin(new HivePlugin(HIVE_CATALOG, metastore));
             Map<String, String> hiveProperties = ImmutableMap.<String, String>builder()
                     .put("hive.metastore.uri", "thrift://localhost:8080")
+                    .put("hive.allow-add-column", "true")
                     .put("hive.allow-drop-table", "true")
                     .put("hive.allow-rename-table", "true")
+                    .put("hive.allow-rename-column", "true")
                     .put("hive.time-zone", TIME_ZONE.getID())
+                    .put("hive.security", "sql-standard")
                     .build();
-            queryRunner.createCatalog("hive", "hive", hiveProperties);
+            queryRunner.createCatalog(HIVE_CATALOG, HIVE_CATALOG, hiveProperties);
 
             copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, createSession(), tables);
             copyTpchTables(queryRunner, "tpch_sampled", TINY_SCHEMA_NAME, createSampledSession(), tables);
@@ -87,6 +92,15 @@ public final class HiveQueryRunner
             queryRunner.close();
             throw e;
         }
+    }
+
+    @NotNull
+    private static Database createDatabaseMetastoreObject(File baseDir, String name)
+    {
+        Database database = new Database(name, null, new File(baseDir, name).toURI().toString(), null);
+        database.setOwnerName("public");
+        database.setOwnerType(PrincipalType.ROLE);
+        return database;
     }
 
     public static Session createSession()
@@ -101,13 +115,9 @@ public final class HiveQueryRunner
 
     private static Session createHiveSession(String schema)
     {
-        return Session.builder()
-                .setUser("user")
-                .setSource("test")
-                .setCatalog("hive")
+        return testSessionBuilder()
+                .setCatalog(HIVE_CATALOG)
                 .setSchema(schema)
-                .setTimeZoneKey(UTC_KEY)
-                .setLocale(ENGLISH)
                 .build();
     }
 }

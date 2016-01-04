@@ -15,10 +15,12 @@ package com.facebook.presto.execution;
 
 import io.airlift.configuration.Config;
 import io.airlift.configuration.ConfigDescription;
+import io.airlift.configuration.DefunctConfig;
 import io.airlift.configuration.LegacyConfig;
 import io.airlift.units.DataSize;
 import io.airlift.units.DataSize.Unit;
 import io.airlift.units.Duration;
+import io.airlift.units.MaxDuration;
 import io.airlift.units.MinDuration;
 
 import javax.validation.constraints.Min;
@@ -26,15 +28,15 @@ import javax.validation.constraints.NotNull;
 
 import java.util.concurrent.TimeUnit;
 
+@DefunctConfig({"experimental.big-query-max-task-memory", "task.max-memory", "task.http-notification-threads"})
 public class TaskManagerConfig
 {
     private boolean verboseStats;
     private boolean taskCpuTimerEnabled = true;
-    private DataSize maxTaskMemoryUsage = new DataSize(256, Unit.MEGABYTE);
-    private DataSize bigQueryMaxTaskMemoryUsage;
     private DataSize maxPartialAggregationMemoryUsage = new DataSize(16, Unit.MEGABYTE);
     private DataSize operatorPreAllocatedMemory = new DataSize(16, Unit.MEGABYTE);
-    private DataSize maxTaskIndexMemoryUsage = new DataSize(64, Unit.MEGABYTE);
+    private DataSize maxIndexMemoryUsage = new DataSize(64, Unit.MEGABYTE);
+    private boolean shareIndexLoading;
     private int maxWorkerThreads = Runtime.getRuntime().availableProcessors() * 4;
     private Integer minDrivers;
 
@@ -42,9 +44,26 @@ public class TaskManagerConfig
 
     private Duration clientTimeout = new Duration(2, TimeUnit.MINUTES);
     private Duration infoMaxAge = new Duration(15, TimeUnit.MINUTES);
+    private Duration infoRefreshMaxWait = new Duration(200, TimeUnit.MILLISECONDS);
     private int writerCount = 1;
     private int taskDefaultConcurrency = 1;
-    private int httpNotificationThreads = 25;
+    private int httpResponseThreads = 100;
+    private int httpTimeoutThreads = 3;
+
+    @MinDuration("1ms")
+    @MaxDuration("10s")
+    @NotNull
+    public Duration getInfoRefreshMaxWait()
+    {
+        return infoRefreshMaxWait;
+    }
+
+    @Config("task.info-refresh-max-wait")
+    public TaskManagerConfig setInfoRefreshMaxWait(Duration infoRefreshMaxWait)
+    {
+        this.infoRefreshMaxWait = infoRefreshMaxWait;
+        return this;
+    }
 
     public boolean isVerboseStats()
     {
@@ -83,34 +102,6 @@ public class TaskManagerConfig
         return this;
     }
 
-    public DataSize getBigQueryMaxTaskMemoryUsage()
-    {
-        if (bigQueryMaxTaskMemoryUsage == null) {
-            return new DataSize(2 * maxTaskMemoryUsage.toBytes(), Unit.BYTE);
-        }
-        return bigQueryMaxTaskMemoryUsage;
-    }
-
-    @Config("experimental.big-query-max-task-memory")
-    public TaskManagerConfig setBigQueryMaxTaskMemoryUsage(DataSize bigQueryMaxTaskMemoryUsage)
-    {
-        this.bigQueryMaxTaskMemoryUsage = bigQueryMaxTaskMemoryUsage;
-        return this;
-    }
-
-    @NotNull
-    public DataSize getMaxTaskMemoryUsage()
-    {
-        return maxTaskMemoryUsage;
-    }
-
-    @Config("task.max-memory")
-    public TaskManagerConfig setMaxTaskMemoryUsage(DataSize maxTaskMemoryUsage)
-    {
-        this.maxTaskMemoryUsage = maxTaskMemoryUsage;
-        return this;
-    }
-
     @NotNull
     public DataSize getOperatorPreAllocatedMemory()
     {
@@ -125,15 +116,28 @@ public class TaskManagerConfig
     }
 
     @NotNull
-    public DataSize getMaxTaskIndexMemoryUsage()
+    public DataSize getMaxIndexMemoryUsage()
     {
-        return maxTaskIndexMemoryUsage;
+        return maxIndexMemoryUsage;
     }
 
     @Config("task.max-index-memory")
-    public TaskManagerConfig setMaxTaskIndexMemoryUsage(DataSize maxTaskIndexMemoryUsage)
+    public TaskManagerConfig setMaxIndexMemoryUsage(DataSize maxIndexMemoryUsage)
     {
-        this.maxTaskIndexMemoryUsage = maxTaskIndexMemoryUsage;
+        this.maxIndexMemoryUsage = maxIndexMemoryUsage;
+        return this;
+    }
+
+    @NotNull
+    public boolean isShareIndexLoading()
+    {
+        return shareIndexLoading;
+    }
+
+    @Config("task.share-index-loading")
+    public TaskManagerConfig setShareIndexLoading(boolean shareIndexLoading)
+    {
+        this.shareIndexLoading = shareIndexLoading;
         return this;
     }
 
@@ -236,15 +240,28 @@ public class TaskManagerConfig
     }
 
     @Min(1)
-    public int getHttpNotificationThreads()
+    public int getHttpResponseThreads()
     {
-        return httpNotificationThreads;
+        return httpResponseThreads;
     }
 
-    @Config("task.http-notification-threads")
-    public TaskManagerConfig setHttpNotificationThreads(int httpNotificationThreads)
+    @Config("task.http-response-threads")
+    public TaskManagerConfig setHttpResponseThreads(int httpResponseThreads)
     {
-        this.httpNotificationThreads = httpNotificationThreads;
+        this.httpResponseThreads = httpResponseThreads;
+        return this;
+    }
+
+    @Min(1)
+    public int getHttpTimeoutThreads()
+    {
+        return httpTimeoutThreads;
+    }
+
+    @Config("task.http-timeout-threads")
+    public TaskManagerConfig setHttpTimeoutThreads(int httpTimeoutThreads)
+    {
+        this.httpTimeoutThreads = httpTimeoutThreads;
         return this;
     }
 }

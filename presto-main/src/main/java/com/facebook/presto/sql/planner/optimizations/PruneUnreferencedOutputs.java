@@ -22,6 +22,7 @@ import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
+import com.facebook.presto.sql.planner.plan.DeleteNode;
 import com.facebook.presto.sql.planner.plan.DistinctLimitNode;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.FilterNode;
@@ -32,12 +33,12 @@ import com.facebook.presto.sql.planner.plan.LimitNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
 import com.facebook.presto.sql.planner.plan.OutputNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.SortNode;
-import com.facebook.presto.sql.planner.plan.TableCommitNode;
+import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
@@ -47,7 +48,6 @@ import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
@@ -64,9 +64,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableSet;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.collect.Iterables.concat;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Removes all computation that does is not referenced transitively from the root of the plan
@@ -85,17 +87,17 @@ public class PruneUnreferencedOutputs
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        checkNotNull(plan, "plan is null");
-        checkNotNull(session, "session is null");
-        checkNotNull(types, "types is null");
-        checkNotNull(symbolAllocator, "symbolAllocator is null");
-        checkNotNull(idAllocator, "idAllocator is null");
+        requireNonNull(plan, "plan is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(types, "types is null");
+        requireNonNull(symbolAllocator, "symbolAllocator is null");
+        requireNonNull(idAllocator, "idAllocator is null");
 
-        return PlanRewriter.rewriteWith(new Rewriter(types), plan, ImmutableSet.<Symbol>of());
+        return SimplePlanRewriter.rewriteWith(new Rewriter(types), plan, ImmutableSet.<Symbol>of());
     }
 
     private static class Rewriter
-            extends PlanRewriter<Set<Symbol>>
+            extends SimplePlanRewriter<Set<Symbol>>
     {
         private final Map<Symbol, Type> types;
 
@@ -109,7 +111,7 @@ public class PruneUnreferencedOutputs
         {
             Set<Symbol> expectedOutputSymbols = Sets.newHashSet(context.get());
             node.getHashSymbol().ifPresent(expectedOutputSymbols::add);
-            expectedOutputSymbols.addAll(node.getPartitionKeys());
+            node.getPartitionKeys().ifPresent(expectedOutputSymbols::addAll);
 
             List<List<Symbol>> inputsBySource = new ArrayList<>(node.getInputs().size());
             for (int i = 0; i < node.getInputs().size(); i++) {
@@ -140,8 +142,7 @@ public class PruneUnreferencedOutputs
             return new ExchangeNode(
                     node.getId(),
                     node.getType(),
-                    node.getPartitionKeys(),
-                    node.getHashSymbol(),
+                    node.getPartitionFunction(),
                     rewrittenSources.build(),
                     newOutputSymbols,
                     inputsBySource);
@@ -229,17 +230,17 @@ public class PruneUnreferencedOutputs
         @Override
         public PlanNode visitIndexSource(IndexSourceNode node, RewriteContext<Set<Symbol>> context)
         {
-            List<Symbol> newOutputSymbols = FluentIterable.from(node.getOutputSymbols())
-                    .filter(in(context.get()))
-                    .toList();
+            List<Symbol> newOutputSymbols = node.getOutputSymbols().stream()
+                    .filter(context.get()::contains)
+                    .collect(toImmutableList());
 
-            Set<Symbol> newLookupSymbols = FluentIterable.from(node.getLookupSymbols())
-                    .filter(in(context.get()))
-                    .toSet();
+            Set<Symbol> newLookupSymbols = node.getLookupSymbols().stream()
+                    .filter(context.get()::contains)
+                    .collect(toImmutableSet());
 
             Set<Symbol> requiredAssignmentSymbols = context.get();
             if (!node.getEffectiveTupleDomain().isNone()) {
-                Set<Symbol> requiredSymbols = Maps.filterValues(node.getAssignments(), in(node.getEffectiveTupleDomain().getDomains().keySet())).keySet();
+                Set<Symbol> requiredSymbols = Maps.filterValues(node.getAssignments(), in(node.getEffectiveTupleDomain().getDomains().get().keySet())).keySet();
                 requiredAssignmentSymbols = Sets.union(context.get(), requiredSymbols);
             }
             Map<Symbol, ColumnHandle> newAssignments = Maps.filterKeys(node.getAssignments(), in(requiredAssignmentSymbols));
@@ -344,13 +345,13 @@ public class PruneUnreferencedOutputs
         @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<Set<Symbol>> context)
         {
-            Set<Symbol> requiredTableScanOutputs = FluentIterable.from(context.get())
-                    .filter(in(ImmutableSet.copyOf(node.getOutputSymbols())))
-                    .toSet();
+            Set<Symbol> requiredTableScanOutputs = context.get().stream()
+                    .filter(node.getOutputSymbols()::contains)
+                    .collect(toImmutableSet());
 
-            List<Symbol> newOutputSymbols = FluentIterable.from(node.getOutputSymbols())
-                    .filter(in(requiredTableScanOutputs))
-                    .toList();
+            List<Symbol> newOutputSymbols = node.getOutputSymbols().stream()
+                    .filter(requiredTableScanOutputs::contains)
+                    .collect(toImmutableList());
 
             Map<Symbol, ColumnHandle> newAssignments = Maps.filterKeys(node.getAssignments(), in(requiredTableScanOutputs));
 
@@ -399,9 +400,10 @@ public class PruneUnreferencedOutputs
         @Override
         public PlanNode visitUnnest(UnnestNode node, RewriteContext<Set<Symbol>> context)
         {
-            List<Symbol> replicateSymbols = FluentIterable.from(node.getReplicateSymbols())
-                    .filter(in(context.get()))
-                    .toList();
+            List<Symbol> replicateSymbols = node.getReplicateSymbols().stream()
+                    .filter(context.get()::contains)
+                    .collect(toImmutableList());
+
             Optional<Symbol> ordinalitySymbol = node.getOrdinalitySymbol();
             if (ordinalitySymbol.isPresent() && !context.get().contains(ordinalitySymbol.get())) {
                 ordinalitySymbol = Optional.empty();
@@ -543,11 +545,18 @@ public class PruneUnreferencedOutputs
         }
 
         @Override
-        public PlanNode visitTableCommit(TableCommitNode node, RewriteContext<Set<Symbol>> context)
+        public PlanNode visitTableFinish(TableFinishNode node, RewriteContext<Set<Symbol>> context)
         {
             // Maintain the existing inputs needed for TableCommitNode
             PlanNode source = context.rewrite(node.getSource(), ImmutableSet.copyOf(node.getSource().getOutputSymbols()));
-            return new TableCommitNode(node.getId(), source, node.getTarget(), node.getOutputSymbols());
+            return new TableFinishNode(node.getId(), source, node.getTarget(), node.getOutputSymbols());
+        }
+
+        @Override
+        public PlanNode visitDelete(DeleteNode node, RewriteContext<Set<Symbol>> context)
+        {
+            PlanNode source = context.rewrite(node.getSource(), ImmutableSet.of(node.getRowId()));
+            return new DeleteNode(node.getId(), source, node.getTarget(), node.getRowId(), node.getOutputSymbols());
         }
 
         @Override

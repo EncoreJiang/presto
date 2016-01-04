@@ -15,9 +15,11 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.operator.Description;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.type.SqlType;
-import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.InvalidCodePointException;
 import io.airlift.slice.InvalidUtf8Exception;
@@ -27,13 +29,11 @@ import io.airlift.slice.Slices;
 
 import javax.annotation.Nullable;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.text.Normalizer;
 import java.util.OptionalInt;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.facebook.presto.type.ArrayType.toStackRepresentation;
 import static com.facebook.presto.util.Failures.checkCondition;
 import static io.airlift.slice.SliceUtf8.countCodePoints;
 import static io.airlift.slice.SliceUtf8.lengthOfCodePoint;
@@ -41,6 +41,7 @@ import static io.airlift.slice.SliceUtf8.lengthOfCodePointSafe;
 import static io.airlift.slice.SliceUtf8.offsetOfCodePoint;
 import static io.airlift.slice.SliceUtf8.toLowerCase;
 import static io.airlift.slice.SliceUtf8.toUpperCase;
+import static io.airlift.slice.Slices.utf8Slice;
 import static java.lang.Character.MAX_CODE_POINT;
 import static java.lang.Character.SURROGATE;
 
@@ -63,17 +64,6 @@ public final class StringFunctions
         catch (InvalidCodePointException e) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Not a valid Unicode code point: " + codepoint, e);
         }
-    }
-
-    @Description("concatenates given strings")
-    @ScalarFunction
-    @SqlType(StandardTypes.VARCHAR)
-    public static Slice concat(@SqlType(StandardTypes.VARCHAR) Slice str1, @SqlType(StandardTypes.VARCHAR) Slice str2)
-    {
-        Slice concat = Slices.allocate(str1.length() + str2.length());
-        concat.setBytes(0, str1);
-        concat.setBytes(str1.length(), str2);
-        return concat;
     }
 
     @Description("count of code points of the given string")
@@ -268,25 +258,24 @@ public final class StringFunctions
 
     @ScalarFunction
     @SqlType("array<varchar>")
-    public static Slice split(@SqlType(StandardTypes.VARCHAR) Slice string, @SqlType(StandardTypes.VARCHAR) Slice delimiter)
+    public static Block split(@SqlType(StandardTypes.VARCHAR) Slice string, @SqlType(StandardTypes.VARCHAR) Slice delimiter)
     {
         return split(string, delimiter, string.length() + 1);
     }
 
     @ScalarFunction
     @SqlType("array<varchar>")
-    public static Slice split(@SqlType(StandardTypes.VARCHAR) Slice string, @SqlType(StandardTypes.VARCHAR) Slice delimiter, @SqlType(StandardTypes.BIGINT) long limit)
+    public static Block split(@SqlType(StandardTypes.VARCHAR) Slice string, @SqlType(StandardTypes.VARCHAR) Slice delimiter, @SqlType(StandardTypes.BIGINT) long limit)
     {
         checkCondition(limit > 0, INVALID_FUNCTION_ARGUMENT, "Limit must be positive");
         checkCondition(limit <= Integer.MAX_VALUE, INVALID_FUNCTION_ARGUMENT, "Limit is too large");
         checkCondition(delimiter.length() > 0, INVALID_FUNCTION_ARGUMENT, "The delimiter may not be the empty string");
+        BlockBuilder parts = VARCHAR.createBlockBuilder(new BlockBuilderStatus(), 1, string.length());
         // If limit is one, the last and only element is the complete string
         if (limit == 1) {
-            return toStackRepresentation(ImmutableList.of(string), VARCHAR);
+            VARCHAR.writeSlice(parts, string);
+            return parts.build();
         }
-
-        // todo this should write directly into a block
-        List<Slice> parts = new ArrayList<>();
 
         int index = 0;
         while (index < string.length()) {
@@ -296,18 +285,18 @@ public final class StringFunctions
                 break;
             }
             // Add the part from current index to found split
-            parts.add(string.slice(index, splitIndex - index));
+            VARCHAR.writeSlice(parts, string, index, splitIndex - index);
             // Continue searching after delimiter
             index = splitIndex + delimiter.length();
             // Reached limit-1 parts so we can stop
-            if (parts.size() == limit - 1) {
+            if (parts.getPositionCount() == limit - 1) {
                 break;
             }
         }
         // Rest of string
-        parts.add(string.slice(index, string.length() - index));
+        VARCHAR.writeSlice(parts, string, index, string.length() - index);
 
-        return toStackRepresentation(parts, VARCHAR);
+        return parts.build();
     }
 
     @Nullable
@@ -397,6 +386,21 @@ public final class StringFunctions
     public static Slice upper(@SqlType(StandardTypes.VARCHAR) Slice slice)
     {
         return toUpperCase(slice);
+    }
+
+    @Description("transforms the string to normalized form")
+    @ScalarFunction
+    @SqlType(StandardTypes.VARCHAR)
+    public static Slice normalize(@SqlType(StandardTypes.VARCHAR) Slice slice, @SqlType(StandardTypes.VARCHAR) Slice form)
+    {
+        Normalizer.Form targetForm;
+        try {
+            targetForm = Normalizer.Form.valueOf(form.toStringUtf8());
+        }
+        catch (IllegalArgumentException e) {
+            throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Normalization form must be one of [NFD, NFC, NFKD, NFKC]");
+        }
+        return utf8Slice(Normalizer.normalize(slice.toStringUtf8(), targetForm));
     }
 
     @Description("decodes the UTF-8 encoded string")
