@@ -19,7 +19,6 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import java.util.Objects;
 
 import static com.facebook.presto.spi.SchemaUtil.checkNotEmpty;
-import static java.util.Locale.ENGLISH;
 
 public class SchemaTableName
 {
@@ -39,8 +38,8 @@ public class SchemaTableName
 
     public SchemaTableName(String schemaName, String tableName)
     {
-        this.schemaName = checkNotEmpty(schemaName, "schemaName").toLowerCase(ENGLISH);
-        this.tableName = checkNotEmpty(tableName, "tableName").toLowerCase(ENGLISH);
+        this.schemaName = checkNotEmpty(schemaName, "schemaName");
+        this.tableName = checkNotEmpty(tableName, "tableName");
     }
 
     public String getSchemaName()

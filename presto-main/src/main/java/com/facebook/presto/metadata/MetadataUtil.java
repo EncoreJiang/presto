@@ -31,9 +31,7 @@ import java.util.Optional;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.CATALOG_NOT_SPECIFIED;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.SCHEMA_NOT_SPECIFIED;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
-//import static java.util.Locale.ENGLISH;
-//import static java.lang.String.format;
+
 import static java.util.Objects.requireNonNull;
 
 public final class MetadataUtil
@@ -42,9 +40,9 @@ public final class MetadataUtil
 
     public static void checkTableName(String catalogName, Optional<String> schemaName, Optional<String> tableName)
     {
-        checkCatalogName(catalogName);
-        checkSchemaName(schemaName);
-        checkTableName(tableName);
+        // checkCatalogName(catalogName);
+        // checkSchemaName(schemaName);
+        // checkTableName(tableName);
 
         checkArgument(schemaName.isPresent() || !tableName.isPresent(), "tableName specified but schemaName is missing");
     }
@@ -96,7 +94,7 @@ public final class MetadataUtil
 
     public static String checkLowerCase(String value, String name)
     {
-        checkNotNull(value, "%s is null", name);
+        //checkNotNull(value, "%s is null", name);
         //checkArgument(value.equals(value.toLowerCase(ENGLISH)), "%s is not lowercase J", name);
         return value;
     }

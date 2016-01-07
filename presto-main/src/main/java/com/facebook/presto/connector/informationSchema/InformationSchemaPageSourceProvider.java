@@ -66,7 +66,6 @@ import static com.facebook.presto.util.Types.checkType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Sets.union;
 import static java.lang.String.format;
-import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 
 public class InformationSchemaPageSourceProvider
@@ -324,7 +323,7 @@ public class InformationSchemaPageSourceProvider
             return Optional.empty();
         }
         if (value.getType().equals(VARCHAR)) {
-            return Optional.of(((Slice) value.getValue()).toStringUtf8().toLowerCase(ENGLISH));
+            return Optional.of(((Slice) value.getValue()).toStringUtf8());
         }
         return Optional.empty();
     }
